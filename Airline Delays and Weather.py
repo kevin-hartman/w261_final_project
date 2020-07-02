@@ -18,7 +18,7 @@
 from pyspark.sql import functions as f
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType, IntegerType, NullType, ShortType, DateType, BooleanType, BinaryType
 from pyspark.sql import SQLContext
-
+import matplotlib.pyplot as plt
 sqlContext = SQLContext(sc)
 
 
@@ -32,7 +32,7 @@ display(dbutils.fs.ls("dbfs:/mnt/mids-w261/data/datasets_final_project/weather_d
 
 # COMMAND ----------
 
-airlines = spark.read.option("header", "true").parquet(f"dbfs:/mnt/mids-w261/data/datasets_final_project/parquet_airlines_data/201*.parquet")
+airlines = spark.read.option("header", "true").parquet(f"dbfs:/mnt/mids-w261/data/datasets_final_project/parquet_airlines_data/*.parquet")
 display(airlines.sample(False, 0.00001))
 
 # COMMAND ----------
@@ -49,7 +49,71 @@ display(airlines.describe())
 
 # COMMAND ----------
 
-airlines.where('MONTH == "MONTH"').count()
+airlines.where('DEP_DELAY < 0').count() / airlines.count() # This statistic explains that 58.7% of flights depart earlier
+
+# COMMAND ----------
+
+airlines.where('DEP_DELAY == 0').count() / airlines.count()  # This statistic explains that 5.2% of flights depart EXACTLY on time
+
+# COMMAND ----------
+
+type(airlines)
+
+# COMMAND ----------
+
+# MAGIC %md ### The cells below are displaying histograms that analyze departures that are on time or early
+
+# COMMAND ----------
+
+bins, counts = airlines.select('DEP_DELAY').where('DEP_DELAY <= 0').rdd.flatMap(lambda x: x).histogram(100)
+plt.hist(bins[:-1], bins=bins, weights=counts)
+
+# COMMAND ----------
+
+bins, counts = airlines.select('DEP_DELAY').where('DEP_DELAY <= 0 AND DEP_DELAY > -25').rdd.flatMap(lambda x: x).histogram(50)
+plt.hist(bins[:-1], bins=bins, weights=counts)
+
+# COMMAND ----------
+
+# MAGIC %md ### The cells below are displaying histograms that analyze departures that are delayed
+
+# COMMAND ----------
+
+bins, counts = airlines.select('DEP_DELAY').where('DEP_DELAY > 0').rdd.flatMap(lambda x: x).histogram(100)
+plt.hist(bins[:-1], bins=bins, weights=counts)
+
+# COMMAND ----------
+
+bins, counts = airlines.select('DEP_DELAY').where('DEP_DELAY > 0 AND DEP_DELAY < 300').rdd.flatMap(lambda x: x).histogram(50)
+plt.hist(bins[:-1], bins=bins, weights=counts)
+
+# COMMAND ----------
+
+bins, counts = airlines.select('DEP_DELAY').where('DEP_DELAY > -25 AND DEP_DELAY < 50').rdd.flatMap(lambda x: x).histogram(50)
+plt.hist(bins[:-1], bins=bins, weights=counts)
+
+# COMMAND ----------
+
+# MAGIC %md **Analyzing the plot above, it is apparent that the distribution is right-skewed, implying that there is a heavy amount of data that is delayed and shifting the distribution towards the right, so therefore the median departure delay is higher than the mean.  Intuitively, this makes sense, for it is more likely that a flight will depart a day later compared to a flight departing a day earlier.  Moreover, we can see that much of the data revolves around flights that depart early or on time, and it is possible that the data is from airports that are smaller with less load; this would explain how the flights would be more likely to depart at an earlier time.  Further analysis of the locations of the actual airports and the distribution of these airports is necessary.**
+
+# COMMAND ----------
+
+# MAGIC %md # TODO
+# MAGIC > Visualize the locations of the airport and the amount of traffic that is coming using a US map  
+# MAGIC https://www.transtats.bts.gov/DL_SelectFields.asp?Table_ID=236&DB_Short_Name=On-Time
+
+# COMMAND ----------
+
+# MAGIC %md ### Next, we will look into visualizing arrival delay.  However, we should note that arrival delay also encompasses any delay from the departure delay.  Therefore, we must first ensure that we create a new column that accounts for this discrepancy.
+
+# COMMAND ----------
+
+from pyspark.sql.functions import lit
+# airlines['ARR_DELAY_CONTRIB'] = airlines['ARR_DELAY'] - airlines['DEP_DELAY'] # contribution of the arrival delay ONLY
+# df.withColumn("ARR_DELAY_CONTRIB",col("salary")* -1)
+# airlines.select('ARR_DELAY','DEP_DELAY', (airlines.ARR_DELAY - airlines.DEP_DELAY).alias('ARR_')).show()
+airlines = airlines.withColumn('IN_FLIGHT_AIR_DELAY', lit(airlines['ARR_DELAY'] - airlines['DEP_DELAY'])) # this column is the time difference between arrival and departure and does not include total flight delay
+airlines.select('IN_FLIGHT_AIR_DELAY').show()
 
 # COMMAND ----------
 
