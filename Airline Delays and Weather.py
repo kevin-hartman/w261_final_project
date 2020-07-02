@@ -101,6 +101,7 @@ plt.hist(bins[:-1], bins=bins, weights=counts)
 # MAGIC %md # TODO
 # MAGIC > Visualize the locations of the airport and the amount of traffic that is coming using a US map  
 # MAGIC https://www.transtats.bts.gov/DL_SelectFields.asp?Table_ID=236&DB_Short_Name=On-Time
+# MAGIC > Scatterplot comparing the distance between the airports and the in flight air delay. 
 
 # COMMAND ----------
 
@@ -114,6 +115,15 @@ from pyspark.sql.functions import lit
 # airlines.select('ARR_DELAY','DEP_DELAY', (airlines.ARR_DELAY - airlines.DEP_DELAY).alias('ARR_')).show()
 airlines = airlines.withColumn('IN_FLIGHT_AIR_DELAY', lit(airlines['ARR_DELAY'] - airlines['DEP_DELAY'])) # this column is the time difference between arrival and departure and does not include total flight delay
 airlines.select('IN_FLIGHT_AIR_DELAY').show()
+
+# COMMAND ----------
+
+bins, counts = airlines.select('IN_FLIGHT_AIR_DELAY').where('IN_FLIGHT_AIR_DELAY > -50 AND IN_FLIGHT_AIR_DELAY < 50').rdd.flatMap(lambda x: x).histogram(50)
+plt.hist(bins[:-1], bins=bins, weights=counts)
+
+# COMMAND ----------
+
+# MAGIC %md **We can see that there is a normal distribution that is centered around -5; this indicates that the flight makes up 5 minutes of time after departing from the airport.  In general, this is implying that flights are making up time in the air time.  Further analysis should look into analyzing the amount of time made up in the air based on distance to see if flights make up more delay time with longer flight distances.**
 
 # COMMAND ----------
 
