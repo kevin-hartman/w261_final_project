@@ -22,6 +22,9 @@ import matplotlib.pyplot as plt
 sqlContext = SQLContext(sc)
 
 
+import pandas as pd
+import seaborn as sns
+
 # COMMAND ----------
 
 display(dbutils.fs.ls("dbfs:/mnt/mids-w261/data/datasets_final_project/"))
@@ -45,7 +48,144 @@ f'{airlines.count():,}'
 
 # COMMAND ----------
 
-display(airlines.describe())
+airlines_sample = airlines.where('(ORIGIN = "ORD" OR ORIGIN = "ATL") AND QUARTER = 1 and YEAR = 2015').sample(False, .10)
+
+# COMMAND ----------
+
+airlines_sample.count()
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+airlines_sample.dtypes
+
+# COMMAND ----------
+
+def get_dtype(df,colname):
+    return [dtype for name, dtype in df.dtypes if name == colname][0]
+
+# COMMAND ----------
+
+get_dtype(airlines_sample, 'ORIGIN')
+
+# COMMAND ----------
+
+airlines_sample.columns
+
+# COMMAND ----------
+
+airlines_sample['ORIGIN']
+
+# COMMAND ----------
+
+
+
+# Custom-made class to assist with EDA on this dataset
+# The code is generalizable. However, specific decisions on plot types were made because
+# all our features are categorical
+class Analyze:
+    def __init__(self, df):
+        self.df = df.toPandas()
+    
+    def remove_df():
+        self.df = None
+        gc.collect()
+        
+    def print_eda_summary(self):
+        #sns.set(rc={'figure.figsize':(10*2,16*8)})
+        sns.set()
+        i=0
+        fig, ax = plt.subplots(nrows=round(len(self.df.columns)), ncols=2, figsize=(16,5*round(len(self.df.columns))))
+        all_cols=[]
+        for col in self.df.columns:
+            #if col == 'MachineIdentifier': continue
+            if self.df[col].dtype.name == 'object'  or self.df[col].dtype.name == 'category': 
+                self.df[col] = self.df[col].astype('str')
+            all_cols.append(col)
+            max_len = self.df[col].nunique()
+            if max_len > 10:
+                max_len = 10
+            g=sns.countplot(y=self.df[col].fillna(-1), hue=self.df['DEP_DEL15'], order=self.df[col].fillna(-1).value_counts(dropna=False).iloc[:max_len].index, ax=ax[i][0])
+            g.set_xlim(0,self.df.shape[0])
+            plt.tight_layout()
+            ax[i][0].title.set_text(col)
+            ax[i][0].xaxis.label.set_visible(False)
+            xlabels = ['{:,.0f}'.format(x) + 'K' for x in g.get_xticks()/1000]
+            g.set_xticklabels(xlabels)
+            ax[i][1].axis("off")
+            # Basic info
+            desc = self.df[col].describe()
+            summary = "DESCRIPTION\n   Name: {:}\n   Type: {:}\n  Count: {:}\n Unique: {:}\nMissing: {:}\nPercent: {:2.3f}".format(
+                desc.name.ljust(50), str(desc.dtype).ljust(10), self.df[col].count(), self.df[col].nunique(),
+                ('yes' if self.df[col].hasnans else 'no'), (1-self.df[col].count()/self.df.shape[0])*100)
+            ax[i][1].text(0, 1, summary, verticalalignment="top", family='monospace', fontsize=12)
+            analysis=[]
+            if self.df[col].dtype.name == 'object': 
+                # additional analysis for categorical variables
+                if len(self.df[col].str.lower().unique()) != len(self.df[col].unique()):
+                    analysis.append("- duplicates from case\n")
+                # look for HTML escape characters (&#x..;)
+                # and unicode characters (searching for: anything not printable)
+                self.df_bad = self.df[col][self.df[col].str.contains(r'[\x00-\x1f]|&#x\d\d;', regex=True, na=True)]
+                if len(self.df_bad) - self.df.shape[0] - self.df[col].count()>0:
+                    analysis.append("- illegal chars: {:}\n".format(len(self.df_bad) - self.df.shape[0] - self.df[col].count()))
+                # find different capitalizations of "unknown"
+                # if more than one present, need to read as string, turn to lowercase, then make categorical
+                self.df_unknown = self.df[col].str.lower() == 'unknown'
+                unknowns = self.df[col][self.df_unknown].unique()
+                if len(unknowns) > 1:
+                    analysis.append("- unknowns\n  {:}\n".format(unknowns))
+                if len(''.join(analysis)) > 0:
+                    ax[i][1].text(.5, .85, 'FINDINGS\n'+''.join(analysis), verticalalignment="top", family='monospace', fontsize=12)
+            else:
+                # Stats for numeric variables
+                statistics = "STATS\n   Mean: {:5.4g}\n    Std: {:5.4g}\n    Min: {:5.4g}\n    25%: {:5.4g}\n    50%: {:5.4g}\n    75%: {:5.4g}\n    Max: {:5.4g}".format(
+                    desc.mean(), desc.std(), desc.min(), desc.quantile(.25), desc.quantile(.5), desc.quantile(.75), desc.max())
+                ax[i][1].text(.5, .85, statistics, verticalalignment="top", family='monospace', fontsize=12)
+
+            # Top 5 and bottom 5 unique values or all unique values if < 10
+            if self.df[col].nunique() <= 10:
+                values = pd.DataFrame(list(zip(self.df[col].value_counts(dropna=False).keys().tolist(),
+                                         self.df[col].value_counts(dropna=False).tolist())),
+                                columns=['VALUES', 'COUNTS'])
+                values = values.to_string(index=False)
+                ax[i][1].text(0, .6, values, verticalalignment="top", family='monospace', fontsize=12)
+            else:
+                values = pd.DataFrame(list(zip(self.df[col].value_counts(dropna=False).iloc[:5].keys().tolist(),
+                                         self.df[col].value_counts(dropna=False).iloc[:5].tolist())),
+                                columns=['VALUES', 'COUNTS'])
+                mid_row = pd.DataFrame({'VALUES':[":"],
+                                        'COUNTS':[":"]})
+                bot_values = pd.DataFrame(list(zip(self.df[col].value_counts(dropna=False).iloc[-5:].keys().tolist(),
+                                         self.df[col].value_counts(dropna=False).iloc[-5:].tolist())),
+                                columns=['VALUES', 'COUNTS'])
+                values = values.append(mid_row)
+                values = values.append(bot_values)
+                values = values.to_string(index=False)
+                ax[i][1].text(0, .6, values, verticalalignment="top", family='monospace', fontsize=12)
+            i=i+1
+        fig.show()
+
+# COMMAND ----------
+
+analyzer = Analyze(airlines_sample)
+analyzer.print_eda_summary()
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+sns.set(rc={'figure.figsize':(100,100)})
+sns.heatmap(df_train.corr(), cmap='RdBu_r', annot=True, center=0.0)
+
+# COMMAND ----------
+
+
 
 # COMMAND ----------
 
