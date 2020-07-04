@@ -283,8 +283,13 @@ weather.printSchema()
 
 # COMMAND ----------
 
-display(weather)
-#weather_subset = weather.where('DATE >= 01/01/2015 AND DATE <= 03/31/2015')
+#display(weather)
+weather_subset = weather.where('DATE >= "01/01/2015" AND DATE <= "03/31/2015"')
+
+# COMMAND ----------
+
+display(weather_subset)
+#weather.where(f.col('NAME').contains('CHICAGO')).show()
 
 # COMMAND ----------
 
@@ -305,6 +310,11 @@ stations.where(f.col('name').contains('CHICAGO')).show()
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Sample functions for selection station info
+
+# COMMAND ----------
+
 stations.select('name').distinct().count()
 
 # COMMAND ----------
@@ -318,3 +328,20 @@ weather.select('NAME').distinct().count()
 # COMMAND ----------
 
 display(weather.select('name').distinct())
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Joining Weather to Station Data
+# MAGIC Note this is for exploratory purposes. The most efficient way to do this will be to first identify the station associated with each airport, add a column for that to the flights data, and then join directly flights to weather. Note this will require a composite key because we care about both **time** and **location**. Note the cell after the initial join where the joined table is displayed with a filter will take a long time to load.
+
+# COMMAND ----------
+
+joined_weather = weather.join(stations, weather.STATION == stations.usaf, 'left')
+
+# COMMAND ----------
+
+display(joined_weather)
+
+# COMMAND ----------
+
