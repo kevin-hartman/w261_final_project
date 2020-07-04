@@ -345,3 +345,52 @@ display(joined_weather)
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC # Airports
+# MAGIC Data from Global Airport Database: https://www.partow.net/miscellaneous/airportdatabase/index.html#Downloads  
+# MAGIC **Make sure to use decimal degree fields for NN**
+
+# COMMAND ----------
+
+# you will need to upllad this to s3 on your own.
+display(dbutils.fs.ls("dbfs:/global_airports"))
+
+# COMMAND ----------
+
+airports = spark.read.option("header", "false").csv("dbfs:/global_airports/GlobalAirportDatabase.txt", sep = ":")
+
+# COMMAND ----------
+
+display(airports)
+
+# COMMAND ----------
+
+# rename the columns
+airports = airports.select(f.col("_c0").alias("ICAO Code"),
+                           f.col("_c1").alias("IATA Code"),
+                           f.col("_c2").alias("Airport Name"),
+                           f.col("_c3").alias("City/Town"),
+                           f.col("_c4").alias("Country"),
+                           f.col("_c5").alias("Latitude Degrees"),
+                           f.col("_c6").alias("Latitude Minutes"),
+                           f.col("_c7").alias("Latitude Seconds"),
+                           f.col("_c8").alias("Latitude Direction"),
+                           f.col("_c9").alias("Longitude Degrees"),
+                           f.col("_c10").alias("Longitude Minutes"),
+                           f.col("_c11").alias("Longitude Seconds"),
+                           f.col("_c12").alias("Longitude Direction"),
+                           f.col("_c13").alias("Altitude"),
+                           f.col("_c14").alias("Latitude Decimal Degrees"),
+                           f.col("_c15").alias("Longitude Decimal Degrees"),
+                          )
+
+# COMMAND ----------
+
+display(airports)
+
+# COMMAND ----------
+
+display(airports.where(f.col('Country').contains('USA')))
+
+# COMMAND ----------
+
