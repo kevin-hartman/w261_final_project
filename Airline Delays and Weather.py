@@ -19,11 +19,10 @@ from pyspark.sql import functions as f
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType, IntegerType, NullType, ShortType, DateType, BooleanType, BinaryType
 from pyspark.sql import SQLContext
 import matplotlib.pyplot as plt
-sqlContext = SQLContext(sc)
-
-
+import numpy as np 
 import pandas as pd
 import seaborn as sns
+sqlContext = SQLContext(sc)
 
 # COMMAND ----------
 
@@ -181,23 +180,19 @@ analyzer.print_eda_summary()
 # COMMAND ----------
 
 sns.set(rc={'figure.figsize':(100,100)})
-sns.heatmap(df_train.corr(), cmap='RdBu_r', annot=True, center=0.0)
+sns.heatmap(airlines_sample.toPandas().corr(), cmap='RdBu_r', annot=True, center=0.0)
 
 # COMMAND ----------
 
-
-
-# COMMAND ----------
-
-airlines.where('DEP_DELAY < 0').count() / airlines.count() # This statistic explains that 58.7% of flights depart earlier
+sns.set(rc={'figure.figsize':(10,10)})
 
 # COMMAND ----------
 
-airlines.where('DEP_DELAY == 0').count() / airlines.count()  # This statistic explains that 5.2% of flights depart EXACTLY on time
+airlines_sample.where('DEP_DELAY < 0').count() / airlines_sample.count() # This statistic explains that 47% of flights depart earlier
 
 # COMMAND ----------
 
-type(airlines)
+airlines_sample.where('DEP_DELAY == 0').count() / airlines_sample.count()  # This statistic explains that 6.9% of flights depart EXACTLY on time
 
 # COMMAND ----------
 
@@ -205,12 +200,12 @@ type(airlines)
 
 # COMMAND ----------
 
-bins, counts = airlines.select('DEP_DELAY').where('DEP_DELAY <= 0').rdd.flatMap(lambda x: x).histogram(100)
+bins, counts = airlines_sample.select('DEP_DELAY').where('DEP_DELAY <= 0').rdd.flatMap(lambda x: x).histogram(100)
 plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
 
-bins, counts = airlines.select('DEP_DELAY').where('DEP_DELAY <= 0 AND DEP_DELAY > -25').rdd.flatMap(lambda x: x).histogram(50)
+bins, counts = airlines_sample.select('DEP_DELAY').where('DEP_DELAY <= 0 AND DEP_DELAY > -25').rdd.flatMap(lambda x: x).histogram(50)
 plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
@@ -219,17 +214,17 @@ plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
 
-bins, counts = airlines.select('DEP_DELAY').where('DEP_DELAY > 0').rdd.flatMap(lambda x: x).histogram(100)
+bins, counts = airlines_sample.select('DEP_DELAY').where('DEP_DELAY > 0').rdd.flatMap(lambda x: x).histogram(100)
 plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
 
-bins, counts = airlines.select('DEP_DELAY').where('DEP_DELAY > 0 AND DEP_DELAY < 300').rdd.flatMap(lambda x: x).histogram(50)
+bins, counts = airlines_sample.select('DEP_DELAY').where('DEP_DELAY > 0 AND DEP_DELAY < 300').rdd.flatMap(lambda x: x).histogram(50)
 plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
 
-bins, counts = airlines.select('DEP_DELAY').where('DEP_DELAY > -25 AND DEP_DELAY < 50').rdd.flatMap(lambda x: x).histogram(50)
+bins, counts = airlines_sample.select('DEP_DELAY').where('DEP_DELAY > -25 AND DEP_DELAY < 50').rdd.flatMap(lambda x: x).histogram(50)
 plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
@@ -253,12 +248,12 @@ from pyspark.sql.functions import lit
 # airlines['ARR_DELAY_CONTRIB'] = airlines['ARR_DELAY'] - airlines['DEP_DELAY'] # contribution of the arrival delay ONLY
 # df.withColumn("ARR_DELAY_CONTRIB",col("salary")* -1)
 # airlines.select('ARR_DELAY','DEP_DELAY', (airlines.ARR_DELAY - airlines.DEP_DELAY).alias('ARR_')).show()
-airlines = airlines.withColumn('IN_FLIGHT_AIR_DELAY', lit(airlines['ARR_DELAY'] - airlines['DEP_DELAY'])) # this column is the time difference between arrival and departure and does not include total flight delay
-airlines.select('IN_FLIGHT_AIR_DELAY').show()
+airlines_sample = airlines_sample.withColumn('IN_FLIGHT_AIR_DELAY', lit(airlines_sample['ARR_DELAY'] - airlines_sample['DEP_DELAY'])) # this column is the time difference between arrival and departure and does not include total flight delay
+airlines_sample.select('IN_FLIGHT_AIR_DELAY').show()
 
 # COMMAND ----------
 
-bins, counts = airlines.select('IN_FLIGHT_AIR_DELAY').where('IN_FLIGHT_AIR_DELAY > -50 AND IN_FLIGHT_AIR_DELAY < 50').rdd.flatMap(lambda x: x).histogram(50)
+bins, counts = airlines_sample.select('IN_FLIGHT_AIR_DELAY').where('IN_FLIGHT_AIR_DELAY > -50 AND IN_FLIGHT_AIR_DELAY < 50').rdd.flatMap(lambda x: x).histogram(50)
 plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
