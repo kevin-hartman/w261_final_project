@@ -283,13 +283,26 @@ weather.printSchema()
 
 # COMMAND ----------
 
-#display(weather)
-weather_subset = weather.where('DATE >= "01/01/2015" AND DATE <= "03/31/2015"')
+display(weather)
 
 # COMMAND ----------
 
+# subset to 1Q2015
+weather_subset = weather.where('DATE >= TO_DATE("01/01/2015", "MM/dd/yyyy") AND DATE <= TO_DATE("03/31/2015", "MM/dd/yyyy")')
+weather_subset.count()
+
+# COMMAND ----------
+
+# exploring station id lengths for join
+weather_w_length = weather.withColumn("STATION_LENGTH", f.length("STATION"))
+display(weather_w_length.agg(f.min("STATION_LENGTH")))
+
+# COMMAND ----------
+
+#Padding IDs
+weather_subset = weather_subset.withColumn("STATION_PAD", f.lpad(weather_subset.STATION, 11, '0'))
+#display(weather_subset.select(f.lpad(weather_subset.STATION, 11, '0').alias('STATION_PAD')))
 display(weather_subset)
-#weather.where(f.col('NAME').contains('CHICAGO')).show()
 
 # COMMAND ----------
 
@@ -298,6 +311,7 @@ display(weather_subset)
 # COMMAND ----------
 
 stations = spark.read.option("header", "true").csv("dbfs:/mnt/mids-w261/data/DEMO8/gsod/stations.csv.gz")
+stations = stations.withColumnRenamed("name","station_name")
 
 # COMMAND ----------
 
@@ -305,8 +319,16 @@ display(stations)
 
 # COMMAND ----------
 
-from pyspark.sql import functions as f
-stations.where(f.col('name').contains('CHICAGO')).show()
+stations.printSchema()
+
+# COMMAND ----------
+
+display(stations.where(f.col('station_name').contains('BIG BEAR')))
+
+# COMMAND ----------
+
+#concatenate usaf and wban
+stations = stations.withColumn("USAF_WBAN", f.concat(f.col("usaf"), f.col("wban")))
 
 # COMMAND ----------
 
@@ -337,11 +359,32 @@ display(weather.select('name').distinct())
 
 # COMMAND ----------
 
-joined_weather = weather.join(stations, weather.STATION == stations.usaf, 'left')
+joined_weather = weather_subset.join(f.broadcast(stations), weather_subset.STATION_PAD == stations.USAF_WBAN, 'left')
 
 # COMMAND ----------
 
-display(joined_weather)
+joined_weather_cache = joined_weather.cache()
+
+# COMMAND ----------
+
+display(joined_weather_cache)
+
+# COMMAND ----------
+
+display(joined_weather_cache.where(f.col('NAME').contains('BIG BEAR')).select(['STATION', 'LATITUDE', 'LONGITUDE', 'ELEVATION','SOURCE','NAME']).distinct())
+
+# COMMAND ----------
+
+no_id_match = joined_weather_cache.where('USAF_WBAN IS NULL').cache()
+
+# COMMAND ----------
+
+display(joined_weather_cache.select(["STATION_PAD", "NAME", "station_name", "usaf", "wban"]).where("usaf = 999999").distinct())
+
+# COMMAND ----------
+
+display(no_id_match.select(["STATION_PAD", "STATION", "NAME", "LATITUDE", "LONGITUDE", "SOURCE"]).distinct())
+#no_id_match.printSchema()
 
 # COMMAND ----------
 
