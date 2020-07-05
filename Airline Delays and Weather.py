@@ -52,6 +52,10 @@ airlines_sample = airlines.where('(ORIGIN = "ORD" OR ORIGIN = "ATL") AND QUARTER
 
 # COMMAND ----------
 
+display(airlines_sample)
+
+# COMMAND ----------
+
 airlines_sample.count()
 
 # COMMAND ----------
@@ -433,7 +437,121 @@ display(airports)
 
 # COMMAND ----------
 
-display(airports.where(f.col('Country').contains('USA')))
+airports = airports.where(f.col('Country').contains('USA'))
+
+# COMMAND ----------
+
+display(airports.where(f.col("Latitude Decimal Degrees") == 0))
+
+# COMMAND ----------
+
+# are there airports with missing lat/long that have corresponding complete entries
+# ABQ fine, ABY (Albany), BQK (Brunswick) totally bad, HAR (Harrisburg) fine with code MDT, SFB (Sanford) totally bad
+display(airports.where(f.col('City/Town').contains('SANFORD')))
+
+# COMMAND ----------
+
+display(airlines.where("ORIGIN = 'ABY'"))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC # Finding nearest station to each airport
+
+# COMMAND ----------
+
+airports.count()
+
+# COMMAND ----------
+
+stations.count()
+
+# COMMAND ----------
+
+29771*552
+
+# COMMAND ----------
+
+from math import radians, cos, sin, asin, sqrt
+
+def haversine(lon1, lat1, lon2, lat2):
+    """
+    Calculate the great circle distance between two points 
+    on the earth (specified in decimal degrees)
+    """
+    # convert decimal degrees to radians 
+    lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
+
+    # haversine formula 
+    dlon = lon2 - lon1 
+    dlat = lat2 - lat1 
+    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+    c = 2 * asin(sqrt(a)) 
+    r = 6371 # Radius of earth in kilometers. Use 3956 for miles
+    return c * r
+
+# COMMAND ----------
+
+#34.14694	-97.1225
+haversine(34.14694, -97.1225, 34.24694, -97.3225)
+
+# COMMAND ----------
+
+# for every airport
+  # create data structure to hold weather station/distance pairs
+  # for every weather station
+    # calculate haversine distance
+    # append to data structure
+    
+  # key for min(distances between airport and weather station)
+
+def find_closest_station(airports,stations):
+    '''
+    airports: rdd
+    stations: rdd
+    '''
+    
+    def calc_distances(airport):
+        airport_list = list(airport)
+        airport_lon = airport_list[-1]
+        airport_lat = airport_list[-2]
+      
+        for station in stations:
+            station_list = list(station)
+            station_lon = station_list[-1]
+            station_lat = station_list[-2]
+            yield (airport, (station.id, haversine(airport.lon, airport.lat, station.lon, station.lat)))
+    
+    def take_min(x,y):
+      '''
+      x and y are tuples of (airport, (station.id, distance))
+      returns (airport, (argmin(station.id), min(distance)))
+      '''
+      minimum_index = np.argmin([x[1][1], y[1][1]])
+      if minimum_index == 0:
+          return x
+      else:
+          return y
+      
+    
+    output = airports.map(calc_distances)\
+                     .reduceByKey(lambda x, y: take_min(x,y))\
+                     .cache()
+  
+
+# COMMAND ----------
+
+# build aiport and station rdds
+airports_rdd = airports.rdd
+stations_rdd = stations.rdd
+
+# COMMAND ----------
+
+for i in airports_rdd.take(3):
+    airport_list = list(i)
+    airport_lon = airport_list[-1]
+    airport_lat = airport_list[-2]
+    print(airport_lon, airport_lat)
 
 # COMMAND ----------
 
