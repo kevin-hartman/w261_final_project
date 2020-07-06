@@ -34,6 +34,10 @@ display(dbutils.fs.ls("dbfs:/mnt/mids-w261/data/datasets_final_project/weather_d
 
 # COMMAND ----------
 
+# MAGIC %md # Flights EDA
+
+# COMMAND ----------
+
 airlines = spark.read.option("header", "true").parquet(f"dbfs:/mnt/mids-w261/data/datasets_final_project/parquet_airlines_data/*.parquet")
 #display(airlines.sample(False, 0.00001))
 
@@ -262,7 +266,7 @@ plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
 
-# MAGIC %md # Weather
+# MAGIC %md # Weather EDA
 # MAGIC https://data.nodc.noaa.gov/cgi-bin/iso?id=gov.noaa.ncdc:C00532
 
 # COMMAND ----------
@@ -301,7 +305,99 @@ display(weather_w_length.agg(f.min("STATION_LENGTH")))
 #Padding IDs
 weather_subset = weather_subset.withColumn("STATION_PAD", f.lpad(weather_subset.STATION, 11, '0'))
 #display(weather_subset.select(f.lpad(weather_subset.STATION, 11, '0').alias('STATION_PAD')))
+# display(weather_subset)
+
+# COMMAND ----------
+
+# WND Fields [direction angle, quality code, type code, speed rate, speed quality code]
+split_col = f.split(weather_subset['WND'], ',')
+weather_subset = weather_subset.withColumn('WND_Direction_Angle', split_col.getItem(0).cast('int')) # numerical
+weather_subset = weather_subset.withColumn('WND_Quality_Code', split_col.getItem(1).cast('int')) # categorical
+weather_subset = weather_subset.withColumn('WND_Type_Code', split_col.getItem(2).cast('string')) # categorical
+weather_subset = weather_subset.withColumn('WND_Speed_Rate', split_col.getItem(3).cast('int')) # categorical
+weather_subset = weather_subset.withColumn('WND_Speed_Quality_Code', split_col.getItem(4).cast('int')) # numerical
+
+# CIG Fields
+split_col = f.split(weather_subset['CIG'], ',')
+weather_subset = weather_subset.withColumn('CIG_Ceiling_Height_Dimension', split_col.getItem(0).cast('int')) # numerical 
+weather_subset = weather_subset.withColumn('CIG_Ceiling_Quality_Code', split_col.getItem(1).cast('int')) # categorical
+weather_subset = weather_subset.withColumn('CIG_Ceiling_Determination_Code', split_col.getItem(2).cast('string')) # categorical 
+weather_subset = weather_subset.withColumn('CIG_CAVOK_code', split_col.getItem(3).cast('string')) # categorical/binary
+
+# VIS Fields
+split_col = f.split(weather_subset['VIS'], ',')
+weather_subset = weather_subset.withColumn('VIS_Distance_Dimension', split_col.getItem(0).cast('int')) # numerical
+weather_subset = weather_subset.withColumn('VIS_Distance_Quality_Code', split_col.getItem(1).cast('int')) # categorical
+weather_subset = weather_subset.withColumn('VIS_Variability_Code', split_col.getItem(2).cast('string')) # categorical/binary
+weather_subset = weather_subset.withColumn('VIS_Quality_Variability_Code', split_col.getItem(3).cast('int')) # categorical
+
+# TMP Fields
+split_col = f.split(weather_subset['TMP'], ',')
+weather_subset = weather_subset.withColumn('TMP_Air_Temp', split_col.getItem(0).cast('int')) # numerical
+weather_subset = weather_subset.withColumn('TMP_Air_Temp_Quality_Code', split_col.getItem(1).cast('string')) # categorical
+
+# DEW Fields
+split_col = f.split(weather_subset['DEW'], ',')
+weather_subset = weather_subset.withColumn('DEW_Point_Temp', split_col.getItem(0).cast('int')) # numerical
+weather_subset = weather_subset.withColumn('DEW_Point_Quality_Code', split_col.getItem(1).cast('string')) # categorical
+
+# SLP Fields
+split_col = f.split(weather_subset['SLP'], ',')
+weather_subset = weather_subset.withColumn('SLP_Sea_Level_Pres', split_col.getItem(0).cast('int')) # numerical
+weather_subset = weather_subset.withColumn('SLP_Sea_Level_Pres_Quality_Code', split_col.getItem(1).cast('int')) # categorical
+
+# Now that the data is split apart, we can transform each column
+
+# COMMAND ----------
+
 display(weather_subset)
+
+# COMMAND ----------
+
+# MAGIC %md **Now we will plot our data to get a visual representation of these flattened points**
+
+# COMMAND ----------
+
+# create histogram of wind speed. Filtered to remove nulls and values higher than the world record of 253 mph (113 m/s)
+bins, counts = weather_subset.where('WND_Speed_Rate <= 113').select('WND_Speed_Rate').rdd.flatMap(lambda x: x).histogram(20)
+plt.hist(bins[:-1], bins=bins, weights=counts)
+
+# COMMAND ----------
+
+# create histogram of VIS distance code
+bins, counts = weather_subset.where('VIS_Distance_Dimension < 999999').select('VIS_Distance_Dimension').rdd.flatMap(lambda x: x).histogram(20)
+plt.hist(bins[:-1], bins=bins, weights=counts)
+
+# COMMAND ----------
+
+# create histogram of SLP level code
+bins, counts = weather_subset.where('SLP_Sea_Level_Pres < 99999').select('SLP_Sea_Level_Pres').rdd.flatMap(lambda x: x).histogram(20)
+plt.hist(bins[:-1], bins=bins, weights=counts)
+
+# COMMAND ----------
+
+# create histogram of DEW field code
+bins, counts = weather_subset.where('DEW_Point_Temp < 9999').select('DEW_Point_Temp').rdd.flatMap(lambda x: x).histogram(20)
+plt.hist(bins[:-1], bins=bins, weights=counts)
+
+# COMMAND ----------
+
+# create histogram of Air Temp code
+bins, counts = weather_subset.where('TMP_Air_Temp < 9999').select('TMP_Air_Temp').rdd.flatMap(lambda x: x).histogram(20)
+plt.hist(bins[:-1], bins=bins, weights=counts)
+
+# COMMAND ----------
+
+# MAGIC %md ### Now let's take a look at how much of this data is missing
+
+# COMMAND ----------
+
+# TMP_Air_Tempbins, counts = weather_subset.where('WND_Categorical_Variables' <= 113').select('WND_Speed_Rate').rdd.flatMap(lambda x: x).histogram(20)
+# plt.hist(bins[:-1], bins=bins, weights=counts)
+
+# COMMAND ----------
+
+
 
 # COMMAND ----------
 
@@ -328,27 +424,6 @@ display(stations.where(f.col('station_name').contains('BIG BEAR')))
 
 #concatenate usaf and wban
 stations = stations.withColumn("USAF_WBAN", f.concat(f.col("usaf"), f.col("wban")))
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### Sample functions for selection station info
-
-# COMMAND ----------
-
-stations.select('name').distinct().count()
-
-# COMMAND ----------
-
-display(stations.select('name').distinct())
-
-# COMMAND ----------
-
-weather.select('NAME').distinct().count()
-
-# COMMAND ----------
-
-display(weather.select('name').distinct())
 
 # COMMAND ----------
 
@@ -389,65 +464,7 @@ display(no_id_match.select(["STATION_PAD", "STATION", "NAME", "LATITUDE", "LONGI
 
 # MAGIC %md
 # MAGIC # Airports
-# MAGIC Data from Global Airport Database: https://www.partow.net/miscellaneous/airportdatabase/index.html#Downloads  
-# MAGIC **Make sure to use decimal degree fields for NN**
-
-# COMMAND ----------
-
-# you will need to upllad this to s3 on your own.
-display(dbutils.fs.ls("dbfs:/global_airports"))
-
-# COMMAND ----------
-
-airports = spark.read.option("header", "false").csv("dbfs:/global_airports/GlobalAirportDatabase.txt", sep = ":")
-
-# COMMAND ----------
-
-display(airports)
-
-# COMMAND ----------
-
-# rename the columns
-airports = airports.select(f.col("_c0").alias("ICAO Code"),
-                           f.col("_c1").alias("IATA Code"),
-                           f.col("_c2").alias("Airport Name"),
-                           f.col("_c3").alias("City/Town"),
-                           f.col("_c4").alias("Country"),
-                           f.col("_c5").alias("Latitude Degrees"),
-                           f.col("_c6").alias("Latitude Minutes"),
-                           f.col("_c7").alias("Latitude Seconds"),
-                           f.col("_c8").alias("Latitude Direction"),
-                           f.col("_c9").alias("Longitude Degrees"),
-                           f.col("_c10").alias("Longitude Minutes"),
-                           f.col("_c11").alias("Longitude Seconds"),
-                           f.col("_c12").alias("Longitude Direction"),
-                           f.col("_c13").alias("Altitude"),
-                           f.col("_c14").alias("Latitude Decimal Degrees"),
-                           f.col("_c15").alias("Longitude Decimal Degrees"),
-                          )
-
-# COMMAND ----------
-
-display(airports)
-
-# COMMAND ----------
-
-airports = airports.where(f.col('Country').contains('USA'))
-
-# COMMAND ----------
-
-display(airports.where(f.col("Latitude Decimal Degrees") == 0))
-
-# COMMAND ----------
-
-# are there airports with missing lat/long that have corresponding complete entries
-# ABQ fine, ABY (Albany), BQK (Brunswick) totally bad, HAR (Harrisburg) fine with code MDT, SFB (Sanford) totally bad
-display(airports.where(f.col('City/Town').contains('SANFORD')))
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC # New Airports Dataset
+# MAGIC Data from OpenFlights: https://openflights.org/data.html 
 
 # COMMAND ----------
 
@@ -455,16 +472,16 @@ display(dbutils.fs.ls("dbfs:/openflights"))
 
 # COMMAND ----------
 
-airports_new = spark.read.option("header", "false").csv("dbfs:/openflights/airports.csv", sep = ",")
+airports = spark.read.option("header", "false").csv("dbfs:/openflights/airports.csv", sep = ",")
 
 # COMMAND ----------
 
-display(airports_new)
+display(airports)
 
 # COMMAND ----------
 
 # rename the columns
-airports_new = airports_new.select(f.col("_c0").alias("Airport ID"),
+airports = airports.select(f.col("_c0").alias("Airport ID"),
                            f.col("_c1").alias("Name"),
                            f.col("_c2").alias("City"),
                            f.col("_c3").alias("Country"),
@@ -482,15 +499,15 @@ airports_new = airports_new.select(f.col("_c0").alias("Airport ID"),
 
 # COMMAND ----------
 
-display(airports_new)
+display(airports)
 
 # COMMAND ----------
 
-airports_new = airports_new.where('Country = "United States"')
+airports = airports.where('Country = "United States"')
 
 # COMMAND ----------
 
-airports_new.count()
+airports.count()
 
 # COMMAND ----------
 
@@ -579,12 +596,12 @@ def find_closest_station(airports,stations):
 # COMMAND ----------
 
 # build aiport and station rdds
-airports_rdd = airports_new.rdd
+airports_rdd = airports.rdd
 stations_rdd = stations.rdd
 
 # COMMAND ----------
 
-airports_rdd.take(1)
+airports.take(1)
 
 # COMMAND ----------
 
@@ -604,16 +621,12 @@ display(airports_stations)
 
 # COMMAND ----------
 
-display(airports_new.where(f.col('IATA').contains('\\N')))
+display(airports.where(f.col('IATA').contains('\\N')))
 
 
 # COMMAND ----------
 
 display(stations.where(f.col('USAF_WBAN').contains('72054300167')))
-
-# COMMAND ----------
-
-display(stations.where(f.col()))
 
 # COMMAND ----------
 
@@ -625,7 +638,7 @@ display(stations.where(f.col()))
 # data distribution across RDD partitions is not idempotent, and could be rearranged or updated during the query execution, thus affecting the output of the randomSplit method
 # to resolve the issue, we can repartition, or apply an aggregate function, or we can cache (https://kb.databricks.com/data/random-split-behavior.html)
 # also add a unique ID (monotonically_increasing_id)
-flightsCache = airlines.withColumn("id", f.monotonically_increasing_id()).cache()
+flightsCache = airlines_sample.withColumn("id", f.monotonically_increasing_id()).cache()
 
 # COMMAND ----------
 
@@ -669,6 +682,132 @@ print(df_validate.count())
 # COMMAND ----------
 
 print(flightsCache.count())
+
+# COMMAND ----------
+
+# review categorical and numerical features:
+cat_cols = [item[0] for item in df_train.dtypes if item[1].startswith('string')] 
+print(str(len(cat_cols)) + '  categorical features')
+num_cols = [item[0] for item in df_train.dtypes if item[1].startswith('int') | item[1].startswith('double')][1:]
+print(str(len(num_cols)) + '  numerical features')
+
+# COMMAND ----------
+
+# review missing info
+def info_missing_table(df_pd):
+    """Input pandas dataframe and Return columns with missing value and percentage"""
+    mis_val = df_pd.isnull().sum() #count total of null in each columns in dataframe
+#count percentage of null in each columns
+    mis_val_percent = 100 * df_pd.isnull().sum() / len(df_pd) 
+    mis_val_table = pd.concat([mis_val, mis_val_percent], axis=1) 
+ #join to left (as column) between mis_val and mis_val_percent
+    mis_val_table_ren_columns = mis_val_table.rename(
+    columns = {0 : 'Missing Values', 1 : '% of Total Values'}) 
+#rename columns in table
+    mis_val_table_ren_columns = mis_val_table_ren_columns[
+    mis_val_table_ren_columns.iloc[:,1] != 0].sort_values('% of Total Values', ascending=False).round(1) 
+        
+    print ("DataFrame has " + str(df_pd.shape[1]) + " columns.\n"    #.shape[1] : just view total columns in dataframe  
+    "There are " + str(mis_val_table_ren_columns.shape[0]) +              
+    " columns that have missing values.") #.shape[0] : just view total rows in dataframe
+    return mis_val_table_ren_columns
+
+
+# COMMAND ----------
+
+missing_recs = info_missing_table(flightsCache.toPandas())
+missing_recs
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+from pyspark.sql.functions import lit
+from pyspark.sql.functions import col,sum
+
+def count_missings(df):
+    miss_counts = list()
+    for c in df.columns:
+        if df.where(col(c).isNull()).count() > 0:
+           tup = (c,int(df.where(col(c).isNull()).count()))
+           miss_counts.append(tup)
+    return miss_counts
+
+
+# COMMAND ----------
+
+missing_counts = count_missings(flightsCache)
+
+# COMMAND ----------
+
+missing_counts
+
+# COMMAND ----------
+
+list_cols_miss=[x[0] for x in missing_counts]
+df_miss= flightsCache.select(*list_cols_miss)
+#categorical columns
+catcolums_miss=[item[0] for item in df_miss.dtypes if item[1].startswith('string')]  #will select name of column with string data type
+print("\ncateogrical columns with missing data:", catcolums_miss)
+### numerical columns
+numcolumns_miss = [item[0] for item in df_miss.dtypes if item[1].startswith('int') | item[1].startswith('double')] #will select name of column with integer or double data type
+print("\nnumerical columns with missing data:", numcolumns_miss)
+
+# COMMAND ----------
+
+# fill in the missing categorical values with the most frequent category 
+from pyspark.sql.functions import rank,sum,col
+
+cleaned_airlines_sample = flightsCache
+
+df_Nomiss=cleaned_airlines_sample.na.drop()
+for x in catcolums_miss:                  
+  mode=df_Nomiss.groupBy(x).count().sort(col("count").desc()).collect()
+  if mode:
+    print(x, mode[0][0]) #print name of columns and it's most categories 
+    cleaned_airlines_sample = cleaned_airlines_sample.na.fill({x:mode[0][0]})
+    
+# fill the missing numerical values with the average of each #column
+from pyspark.sql.functions import mean, round
+for i in numcolumns_miss:
+  meanvalue = cleaned_airlines_sample.select(round(mean(i))).collect()
+  if meanvalue:
+    print(i, meanvalue[0][0]) 
+    cleaned_airlines_sample=cleaned_airlines_sample.na.fill({i:meanvalue[0][0]})
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+# Use the OneHotEncoderEstimator to convert categorical features into one-hot vectors
+# Use VectorAssembler to combine vector of one-hots and the numerical features
+# Append the process into the stages array to reproduce
+from pyspark.ml.feature import OneHotEncoderEstimator, StringIndexer, VectorAssembler
+
+stages = []
+for categoricalCol in cat_cols:
+    stringIndexer = StringIndexer(inputCol = categoricalCol, outputCol = categoricalCol + 'Index')
+    encoder = OneHotEncoderEstimator(inputCols=[stringIndexer.getOutputCol()], outputCols=[categoricalCol + "classVec"])
+stages += [stringIndexer, encoder]
+assemblerInputs = [c + "classVec" for c in cat_cols] + num_cols
+assembler = VectorAssembler(inputCols=assemblerInputs, outputCol="features")
+stages += [assembler]
+
+# COMMAND ----------
+
+# set up a pipeline to apply all the stages of transformation
+from pyspark.ml import Pipeline
+cols = cleaned_airlines_sample.columns
+pipeline = Pipeline(stages = stages)
+pipelineModel = pipeline.fit(cleaned_airlines_sample)
+cleaned_airlines_sample = pipelineModel.transform(cleaned_airlines_sample)
+selectedCols = ['features']+cols
+cleaned_airlines_sample = cleaned_airlines_sample.select(selectedCols)
+pd.DataFrame(cleaned_airlines_sample.take(5), columns=cleaned_airlines_sample.columns)
 
 # COMMAND ----------
 
