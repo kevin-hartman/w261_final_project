@@ -446,24 +446,56 @@ display(airports.where(f.col('City/Town').contains('SANFORD')))
 
 # COMMAND ----------
 
-display(airlines.where("ORIGIN = 'ABY'"))
+# MAGIC %md
+# MAGIC # New Airports Dataset
+
+# COMMAND ----------
+
+display(dbutils.fs.ls("dbfs:/openflights"))
+
+# COMMAND ----------
+
+airports_new = spark.read.option("header", "false").csv("dbfs:/openflights/airports.csv", sep = ",")
+
+# COMMAND ----------
+
+display(airports_new)
+
+# COMMAND ----------
+
+# rename the columns
+airports_new = airports_new.select(f.col("_c0").alias("Airport ID"),
+                           f.col("_c1").alias("Name"),
+                           f.col("_c2").alias("City"),
+                           f.col("_c3").alias("Country"),
+                           f.col("_c4").alias("IATA"),
+                           f.col("_c5").alias("ICAO"),
+                           f.col("_c6").alias("Latitude"),
+                           f.col("_c7").alias("Longitude"),
+                           f.col("_c8").alias("Altitude"),
+                           f.col("_c9").alias("Timezone"),
+                           f.col("_c10").alias("DST"),
+                           f.col("_c11").alias("LTz database time zone"),
+                           f.col("_c12").alias("Type"),
+                           f.col("_c13").alias("Source")
+                          )
+
+# COMMAND ----------
+
+display(airports_new)
+
+# COMMAND ----------
+
+airports_new = airports_new.where('Country = "United States"')
+
+# COMMAND ----------
+
+airports_new.count()
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC # Finding nearest station to each airport
-
-# COMMAND ----------
-
-airports.count()
-
-# COMMAND ----------
-
-stations.count()
-
-# COMMAND ----------
-
-29771*552
 
 # COMMAND ----------
 
@@ -506,47 +538,137 @@ def find_closest_station(airports,stations):
     stations: rdd
     '''
     
+    stations = sc.broadcast(stations.collect())
+    
     def calc_distances(airport):
         airport_list = list(airport)
-        airport_lon = airport_list[-1]
-        airport_lat = airport_list[-2]
-      
-        for station in stations:
+        airport_lon = float(airport_list[7])
+        airport_lat = float(airport_list[6])
+
+        for station in stations.value:
             station_list = list(station)
-            station_lon = station_list[-1]
-            station_lat = station_list[-2]
-            yield (airport, (station.id, haversine(airport.lon, airport.lat, station.lon, station.lat)))
-    
+            if not station_list[7] or not station_list[6]:
+                continue
+            station_lon = float(station_list[7])
+            station_lat = float(station_list[6])
+            station_id = station_list[-1]
+            yield (airport[4], (station_id, haversine(airport_lon, airport_lat, station_lon, station_lat)))
+  
+  
     def take_min(x,y):
       '''
       x and y are tuples of (airport, (station.id, distance))
       returns (airport, (argmin(station.id), min(distance)))
       '''
-      minimum_index = np.argmin([x[1][1], y[1][1]])
+      minimum_index = np.argmin([x[1], y[1]])
       if minimum_index == 0:
           return x
       else:
           return y
       
     
-    output = airports.map(calc_distances)\
-                     .reduceByKey(lambda x, y: take_min(x,y))\
-                     .cache()
+    
+    #output = airports.mapPartitions(calc_distances)
+    output = airports.flatMap(calc_distances)
+    #print(set(output.keys().collect()))           
+    output = output.reduceByKey(lambda x, y: take_min(x,y))
+    
+    return output
   
 
 # COMMAND ----------
 
 # build aiport and station rdds
-airports_rdd = airports.rdd
+airports_rdd = airports_new.rdd
 stations_rdd = stations.rdd
 
 # COMMAND ----------
 
-for i in airports_rdd.take(3):
-    airport_list = list(i)
-    airport_lon = airport_list[-1]
-    airport_lat = airport_list[-2]
-    print(airport_lon, airport_lat)
+airports_rdd.take(1)
+
+# COMMAND ----------
+
+closest_stations = find_closest_station(airports_rdd,stations_rdd).cache()
+
+# COMMAND ----------
+
+closest_stations.collect()
+
+# COMMAND ----------
+
+airports_stations = sqlContext.createDataFrame(closest_stations)
+airports_stations = airports_stations.withColumn("nearest_station_id",f.col("_2")["_1"]).withColumn("nearest_station_dist",f.col("_2")["_2"])
+airports_stations =airports_stations.drop("_2")
+airports_stations = airports_stations.withColumnRenamed("_1", "IATA")
+display(airports_stations)
+
+# COMMAND ----------
+
+display(airports_new.where(f.col('IATA').contains('\\N')))
+
+
+# COMMAND ----------
+
+display(stations.where(f.col('USAF_WBAN').contains('72054300167')))
+
+# COMMAND ----------
+
+display(stations.where(f.col()))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC # Split the train/validation/test sets and normalize the data
+
+# COMMAND ----------
+
+# data distribution across RDD partitions is not idempotent, and could be rearranged or updated during the query execution, thus affecting the output of the randomSplit method
+# to resolve the issue, we can repartition, or apply an aggregate function, or we can cache (https://kb.databricks.com/data/random-split-behavior.html)
+# also add a unique ID (monotonically_increasing_id)
+flightsCache = airlines.withColumn("id", f.monotonically_increasing_id()).cache()
+
+# COMMAND ----------
+
+flightsCache = flightsCache.na.drop(subset=["DEP_DEL15"])
+
+# COMMAND ----------
+
+# function to create stratified train, test and validate sets from supplied ratios 
+def generate_train_test_validate_sets(train_ratio, test_ratio, df, label, join_on, seed):
+    reserved_size = 1-train_ratio
+    
+    fractions = df.select(label).distinct().withColumn("fraction", f.lit(train_ratio)).rdd.collectAsMap()
+    df_train = df.stat.sampleBy(label, fractions, seed)
+    df_remaining = df.join(df_train, on=join_on, how="left_anti")
+    
+    reserved_size = 1 - (test_ratio / reserved_size)
+
+    fractions = df_remaining.select(label).distinct().withColumn("fraction", f.lit(reserved_size)).rdd.collectAsMap()
+    df_test = df_remaining.stat.sampleBy(label, fractions, seed)
+    df_validate = df_remaining.join(df_test, on=join_on, how="left_anti")
+   
+    return df_train, df_test, df_validate
+
+
+# COMMAND ----------
+
+df_train, df_test, df_validate = generate_train_test_validate_sets(train_ratio=.8, test_ratio=.1, df=flightsCache, label='DEP_DEL15', join_on="id", seed=42)
+
+# COMMAND ----------
+
+print(df_train.count())
+
+# COMMAND ----------
+
+print(df_test.count())
+
+# COMMAND ----------
+
+print(df_validate.count())
+
+# COMMAND ----------
+
+print(flightsCache.count())
 
 # COMMAND ----------
 
