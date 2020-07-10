@@ -35,6 +35,8 @@ display(dbutils.fs.ls("dbfs:/mnt/mids-w261/data/datasets_final_project/weather_d
 # COMMAND ----------
 
 # MAGIC %md # Flights EDA
+# MAGIC 
+# MAGIC Schema for flights: https://annettegreiner.com/vizcomm/OnTime_readme.html
 
 # COMMAND ----------
 
@@ -268,6 +270,9 @@ plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # MAGIC %md # Weather EDA
 # MAGIC https://data.nodc.noaa.gov/cgi-bin/iso?id=gov.noaa.ncdc:C00532
+# MAGIC 
+# MAGIC 
+# MAGIC Schema for weather: https://www.ncei.noaa.gov/data/global-hourly/doc/isd-format-document.pdf
 
 # COMMAND ----------
 
@@ -291,8 +296,9 @@ display(weather)
 # COMMAND ----------
 
 # subset to 1Q2015
-weather_subset = weather.where('DATE >= TO_DATE("01/01/2015", "MM/dd/yyyy") AND DATE <= TO_DATE("03/31/2015", "MM/dd/yyyy")')
-weather_subset.count()
+# weather_subset = weather.where('DATE >= TO_DATE("01/01/2015", "MM/dd/yyyy") AND DATE <= TO_DATE("03/31/2015", "MM/dd/yyyy")')  # this takes only the first quarter of weather data
+weather_subset = weather 
+weather_subset.count() 
 
 # COMMAND ----------
 
@@ -347,6 +353,18 @@ weather_subset = weather_subset.withColumn('SLP_Sea_Level_Pres', split_col.getIt
 weather_subset = weather_subset.withColumn('SLP_Sea_Level_Pres_Quality_Code', split_col.getItem(1).cast('int')) # categorical
 
 # Now that the data is split apart, we can transform each column
+
+# COMMAND ----------
+
+weather_distinct_ids = weather_subset.select(f.lpad(weather_subset.STATION, 11, '0').alias('STATION_PAD')).distinct()
+
+# COMMAND ----------
+
+display(weather_distinct_ids)
+
+# COMMAND ----------
+
+
 
 # COMMAND ----------
 
@@ -449,6 +467,23 @@ display(joined_weather_cache.where(f.col('NAME').contains('BIG BEAR')).select(['
 
 # COMMAND ----------
 
+# MAGIC %md **Now we will do more joins where we take the distinct weather id's and join it with the station dataset**
+
+# COMMAND ----------
+
+joined_weather_distinct_ids = weather_distinct_ids.join(f.broadcast(stations), weather_distinct_ids.STATION_PAD == stations.USAF_WBAN, 'left')
+joined_weather_distinct_ids = joined_weather_distinct_ids.where("STATION_PAD IS NOT NULL")
+
+# COMMAND ----------
+
+display(joined_weather_distinct_ids)
+
+# COMMAND ----------
+
+joined_weather_joined_weather_distinct_ids.where("STATION_PAD IS NOT NULL")
+
+# COMMAND ----------
+
 no_id_match = joined_weather_cache.where('USAF_WBAN IS NULL').cache()
 
 # COMMAND ----------
@@ -503,7 +538,7 @@ display(airports)
 
 # COMMAND ----------
 
-airports = airports.where('Country = "United States"')
+airports = airports.where('Country = "United States" OR Country = "Puerto Rico" OR Country = "Virgin Islands"')
 
 # COMMAND ----------
 
@@ -541,6 +576,10 @@ haversine(34.14694, -97.1225, 34.24694, -97.3225)
 
 # COMMAND ----------
 
+display(joined_weather_distinct_ids)
+
+# COMMAND ----------
+
 # for every airport
   # create data structure to hold weather station/distance pairs
   # for every weather station
@@ -564,10 +603,10 @@ def find_closest_station(airports,stations):
 
         for station in stations.value:
             station_list = list(station)
-            if not station_list[7] or not station_list[6]:
+            if not station_list[8] or not station_list[7]:
                 continue
-            station_lon = float(station_list[7])
-            station_lat = float(station_list[6])
+            station_lon = float(station_list[8])
+            station_lat = float(station_list[7])
             station_id = station_list[-1]
             yield (airport[4], (station_id, haversine(airport_lon, airport_lat, station_lon, station_lat)))
   
@@ -597,7 +636,7 @@ def find_closest_station(airports,stations):
 
 # build aiport and station rdds
 airports_rdd = airports.rdd
-stations_rdd = stations.rdd
+stations_rdd = joined_weather_distinct_ids.rdd
 
 # COMMAND ----------
 
@@ -616,8 +655,21 @@ closest_stations.collect()
 airports_stations = sqlContext.createDataFrame(closest_stations)
 airports_stations = airports_stations.withColumn("nearest_station_id",f.col("_2")["_1"]).withColumn("nearest_station_dist",f.col("_2")["_2"])
 airports_stations =airports_stations.drop("_2")
-airports_stations = airports_stations.withColumnRenamed("_1", "IATA")
-display(airports_stations)
+airports_stations_origin = airports_stations.withColumnRenamed("_1", "IATA")
+airports_stations_dest = airports_stations_origin
+
+airports_stations_origin = airports_stations_origin.withColumnRenamed("IATA", "IATA_ORIGIN")
+airports_stations_origin = airports_stations_origin.withColumnRenamed("nearest_station_id", "nearest_station_id_ORIGIN")
+airports_stations_origin = airports_stations_origin.withColumnRenamed("nearest_station_dist", "nearest_station_dist_ORIGIN")
+
+airports_stations_dest = airports_stations_dest.withColumnRenamed("IATA", "IATA_DEST")
+airports_stations_dest = airports_stations_dest.withColumnRenamed("nearest_station_id", "nearest_station_id_DEST")
+airports_stations_dest = airports_stations_dest.withColumnRenamed("nearest_station_dist", "nearest_station_id_DEST")
+display(airports_stations_origin)
+
+# COMMAND ----------
+
+display(airports_stations_dest)
 
 # COMMAND ----------
 
@@ -627,6 +679,93 @@ display(airports.where(f.col('IATA').contains('\\N')))
 # COMMAND ----------
 
 display(stations.where(f.col('USAF_WBAN').contains('72054300167')))
+
+# COMMAND ----------
+
+# MAGIC %md ## Now we will add in the nearest weather stations to each flight
+
+# COMMAND ----------
+
+display(airlines_sample)
+
+# COMMAND ----------
+
+joined_flights_stations = airlines_sample.join(f.broadcast(airports_stations_origin), airlines_sample.ORIGIN == airports_stations_origin.IATA_ORIGIN, 'left')
+joined_flights_stations = joined_flights_stations.join(f.broadcast(airports_stations_dest), joined_flights_stations.DEST == airports_stations_dest.IATA_DEST, 'left')
+
+# COMMAND ----------
+
+display(joined_flights_stations)
+
+# COMMAND ----------
+
+# MAGIC %md **Prior to creating the composite keys, we need to make adjustments to our time variables**
+
+# COMMAND ----------
+
+from pytz import timezone
+display(airports)
+
+
+# COMMAND ----------
+
+# MAGIC %md ## Now we will create composite keys based on the station id, flight and weather measurement time from the joined weather station dataset
+
+# COMMAND ----------
+
+# In Weather: StationID_MeasurementMonth_MeasurementDay_MeasurementHour
+from pyspark.sql.functions import udf
+def get_flight_hour(flight_time):
+    flight_time = str(flight_time)
+    hour = ''
+    if len(flight_time) == 3:
+      hour = flight_time[0]
+    elif len(flight_time) == 4:
+      hour = flight_time[:2]
+    return hour
+  
+# spark.udf.register("get_flight_hour", get_flight_hour)
+get_flight_hour = udf(get_flight_hour)
+get_two_hour_adjusted_flight_hour = udf(get_two_hour_adjusted_flight_hour)
+# joined_flight_stations = joined_flights_stations.withColumn("FLIGHT_HOUR", f.lit(lambda x: get_flight_hour(x["CRS_DEP_TIME"])))
+# display(joined_flight_stations.select("CRS_DEP_TIME", get_flight_hour("CRS_DEP_TIME")))
+
+joined_flight_stations = joined_flights_stations.withColumn("ORIGIN_Weather_Key",\
+                                                                      f.concat(joined_flights_stations["nearest_station_id_ORIGIN"],\
+                                                                               joined_flights_stations["YEAR"],\
+                                                                               joined_flights_stations["MONTH"],\
+                                                                               joined_flights_stations["DAY_OF_MONTH"],\
+                                                                               get_two_hour_adjusted_flight_hour(joined_flights_stations["CRS_DEP_TIME"])))
+
+joined_flight_stations = joined_flights_stations.withColumn("DEST_Weather_Key",\
+                                                                      f.concat(joined_flights_stations["nearest_station_id_DEST"],\
+                                                                               joined_flights_stations["YEAR"],\
+                                                                               joined_flights_stations["MONTH"],\
+                                                                               joined_flights_stations["DAY_OF_MONTH"],\
+                                                                               get_two_hour_adjusted_flight_hour(joined_flights_stations["CRS_DEP_TIME"])))
+
+# COMMAND ----------
+
+display(joined_flight_stations)
+
+# COMMAND ----------
+
+# In Weather: StationID_MeasurementMonth_MeasurementDay_MeasurementHour
+def get_two_hour_adjusted_flight_hour(flight_time):
+    flight_time = str(flight_time)
+    hour = None
+    if len(flight_time) == 3:
+      hour = int(flight_time[0])
+    elif len(flight_time) == 4:
+      hour = int(flight_time[:2])
+    else:
+      return hour
+    hour = hour - 2
+    if hour == -1:
+      hour = 23
+    elif hour == -2:
+      hour = 22
+    return str(hour)
 
 # COMMAND ----------
 
