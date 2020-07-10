@@ -22,6 +22,7 @@ import matplotlib.pyplot as plt
 import numpy as np 
 import pandas as pd
 import seaborn as sns
+from pyspark.sql.functions import udf
 sqlContext = SQLContext(sc)
 
 # COMMAND ----------
@@ -176,8 +177,8 @@ class Analyze:
 
 # COMMAND ----------
 
-analyzer = Analyze(airlines_sample)
-analyzer.print_eda_summary()
+# analyzer = Analyze(airlines_sample)
+# analyzer.print_eda_summary()
 
 # COMMAND ----------
 
@@ -703,8 +704,60 @@ display(joined_flights_stations)
 
 # COMMAND ----------
 
-from pytz import timezone
-display(airports)
+airports_and_flights = joined_flights_stations.join(f.broadcast(airports), joined_flights_stations.ORIGIN == airports.IATA, 'left')
+
+# COMMAND ----------
+
+display(airports_and_flights)
+
+# COMMAND ----------
+
+from pytz import timezone 
+import datetime
+timezone = airlinelocal = pytz.timezone ("America/Los_Angeles")
+
+naive = datetime.datetime.strptime ("2001-2-3 10:11:12", "%Y-%m-%d %H:%M:%S")
+local_dt = local.localize(naive, is_dst=None)
+utc_dt = local_dt.astimezone(pytz.utc)
+
+def convertToUTC(flightDate, CRSTime, timezone):
+    utc = timezone('UTC')
+    # utcDt = datetime(2002, 10, 27, 6, 0, 0, tzinfo=utc)
+
+# COMMAND ----------
+
+def get_utc_datetime(year, month, day, hour, tz):
+  tz = timezone(tz)
+  utc = timezone('UTC')
+#   hour = int(hour) + int(offset)
+#   if (hour < 0):
+#     day = int(day) - 1 if day is not 1 else 
+#     hour = hour + 24
+
+  local_dt = datetime.datetime(int(year), int(month), int(day), int(hour), 0, 0, tzinfo=tz)
+  utc_dt = local_dt.astimezone(utc)
+  
+  return utc_dt
+
+# COMMAND ----------
+
+get_utc_datetime = udf(get_utc_datetime)
+joined_flights_stations = airports_and_flights.withColumn("FLIGHT_TIME_UTC", 
+                                                                      get_utc_datetime(airports_and_flights["YEAR"],\
+                                                                               airports_and_flights["MONTH"],\
+                                                                               airports_and_flights["DAY_OF_MONTH"],\
+                                                                               get_flight_hour(airports_and_flights["CRS_DEP_TIME"]),\
+                                                                               airports_and_flights["LTz database time zone"]))
+
+# COMMAND ----------
+
+display(joined_flights_stations)
+
+# COMMAND ----------
+
+from datetime import timedelta #todo move this to imports section
+def get_two_hour_adjusted_datetime(current_datetime):
+  return (current_datetime - timedelta(hours=2))
 
 
 # COMMAND ----------
@@ -714,7 +767,6 @@ display(airports)
 # COMMAND ----------
 
 # In Weather: StationID_MeasurementMonth_MeasurementDay_MeasurementHour
-from pyspark.sql.functions import udf
 def get_flight_hour(flight_time):
     flight_time = str(flight_time)
     hour = ''
@@ -730,14 +782,14 @@ get_two_hour_adjusted_flight_hour = udf(get_two_hour_adjusted_flight_hour)
 # joined_flight_stations = joined_flights_stations.withColumn("FLIGHT_HOUR", f.lit(lambda x: get_flight_hour(x["CRS_DEP_TIME"])))
 # display(joined_flight_stations.select("CRS_DEP_TIME", get_flight_hour("CRS_DEP_TIME")))
 
-joined_flight_stations = joined_flights_stations.withColumn("ORIGIN_Weather_Key",\
+joined_flights_stations = joined_flights_stations.withColumn("ORIGIN_Weather_Key",\
                                                                       f.concat(joined_flights_stations["nearest_station_id_ORIGIN"],\
                                                                                joined_flights_stations["YEAR"],\
                                                                                joined_flights_stations["MONTH"],\
                                                                                joined_flights_stations["DAY_OF_MONTH"],\
                                                                                get_two_hour_adjusted_flight_hour(joined_flights_stations["CRS_DEP_TIME"])))
 
-joined_flight_stations = joined_flights_stations.withColumn("DEST_Weather_Key",\
+joined_flights_stations = joined_flights_stations.withColumn("DEST_Weather_Key",\
                                                                       f.concat(joined_flights_stations["nearest_station_id_DEST"],\
                                                                                joined_flights_stations["YEAR"],\
                                                                                joined_flights_stations["MONTH"],\
@@ -746,7 +798,7 @@ joined_flight_stations = joined_flights_stations.withColumn("DEST_Weather_Key",\
 
 # COMMAND ----------
 
-display(joined_flight_stations)
+display(joined_flights_stations)
 
 # COMMAND ----------
 
