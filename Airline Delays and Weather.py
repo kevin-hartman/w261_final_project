@@ -1,10 +1,41 @@
 # Databricks notebook source
-# MAGIC %md # Airline delays 
-# MAGIC ## Bureau of Transportation Statistics
+# MAGIC %md # W261 Final Project - Airline Delays and Weather
+# MAGIC __`MIDS w261: Machine Learning at Scale | UC Berkeley School of Information | Summer 2020`__
+# MAGIC ### Team 1:
+# MAGIC * Sayan Das
+# MAGIC * Kevin Hartman
+# MAGIC * Hersh Solanki
+# MAGIC * Nick Sylva
+
+# COMMAND ----------
+
+# MAGIC %md # Table of Contents
+# MAGIC ### 1. Introduction
+# MAGIC ### 2. Data Sources
+# MAGIC ### 3. Question Formulation
+# MAGIC ### 4. Pipeline Configuration
+# MAGIC ### 5. EDA
+# MAGIC ### 6. Feature Engineering
+# MAGIC ### 7. Algorithm Exploration
+# MAGIC ### 8. Algorithm Implementation
+# MAGIC ### 9. Conclusion
+# MAGIC ### (10. Application of Course Concepts)
+
+# COMMAND ----------
+
+# MAGIC %md # 1. Introduction
+# MAGIC TBD
+
+# COMMAND ----------
+
+# MAGIC %md # 2. Data Sources
+# MAGIC 
+# MAGIC ## Airline delays 
+# MAGIC ### Bureau of Transportation Statistics
 # MAGIC https://www.transtats.bts.gov/DL_SelectFields.asp?Table_ID=236   
 # MAGIC https://www.bts.gov/topics/airlines-and-airports/understanding-reporting-causes-flight-delays-and-cancellations
 # MAGIC 
-# MAGIC 2015 - 2019
+# MAGIC Dates covered in dataset: 2015 - 2019
 
 # COMMAND ----------
 
@@ -12,6 +43,12 @@
 # MAGIC This might be useful in matching station codes to airports:
 # MAGIC 1. http://dss.ucar.edu/datasets/ds353.4/inventories/station-list.html
 # MAGIC 2. https://www.world-airport-codes.com/
+
+# COMMAND ----------
+
+# MAGIC %md # 3. Pipeline Configuration
+# MAGIC 
+# MAGIC ### Imports
 
 # COMMAND ----------
 
@@ -24,48 +61,318 @@ import pandas as pd
 import seaborn as sns
 sqlContext = SQLContext(sc)
 
-# COMMAND ----------
-
-display(dbutils.fs.ls("dbfs:/mnt/mids-w261/data/datasets_final_project/"))
+from delta.tables import DeltaTable
 
 # COMMAND ----------
 
-display(dbutils.fs.ls("dbfs:/mnt/mids-w261/data/datasets_final_project/weather_data"))
+# MAGIC %md ### Prep Database for Staging
 
 # COMMAND ----------
 
-# MAGIC %md # Flights EDA
+username = "kevin"
+dbutils.widgets.text("username", username)
+spark.sql(f"CREATE DATABASE IF NOT EXISTS airline_delays_{username}")
+spark.sql(f"USE airline_delays_{username}")
+
+flights_loc = f"/airline_delays/{username}/DLRS/flights/"
+flights_3m_loc = f"/airline_delays/{username}/DLRS/flights_3m/"
+flights_6m_loc = f"/airline_delays/{username}/DLRS/flights_6m/"
+airlines_loc = f"/airline_delays/{username}/DLRS/airlines/"
+airports_loc = f"/airline_delays/{username}/DLRS/airports/"
+weather_loc = f"/airline_delays/{username}/DLRS/weather/"
+stations_loc = f"/airline_delays/{username}/DLRS/stations/"
+
+spark.conf.set("spark.sql.shuffle.partitions", 8)
+
+# COMMAND ----------
+
+# MAGIC %md ### Download data and store locally (Bronze)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC #### Clear raw staging folders
+
+# COMMAND ----------
+
+dbutils.fs.rm(flights_loc + "raw", recurse=True)
+dbutils.fs.rm(airlines_loc + "raw", recurse=True)
+dbutils.fs.rm(airports_loc + "raw", recurse=True)
+dbutils.fs.rm(weather_loc + "raw", recurse=True)
+dbutils.fs.rm(stations_loc + "raw", recurse=True)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC #### Flights and Weather
+# MAGIC 
+# MAGIC Data from mids-w261 project folder
+
+# COMMAND ----------
+
+source_path = "dbfs:/mnt/mids-w261/data/datasets_final_project/"
+demo8_source_path = "dbfs:/mnt/mids-w261/data/DEMO8/"
+display(dbutils.fs.ls(source_path))
+
+flights_source_path = source_path + "parquet_airlines_data/"
+flights_3m_source_path = source_path + "parquet_airlines_data_3m/"
+flights_6m_source_path = source_path + "parquet_airlines_data_6m/"
+weather_source_path = source_path + "weather_data/"
+stations_source_path = demo8_source_path + "gsod/"
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ##### TODO: Decide if we want to move the files locally. If not, just go direct to the source_path.
+
+# COMMAND ----------
+
+flights_raw_df = spark.read.option("header", "true").parquet(flights_source_path + "*.parquet")
+flights_raw_3m_df = spark.read.option("header", "true").parquet(flights_3m_source_path + "*.parquet")
+flights_raw_6m_df = spark.read.option("header", "true").parquet(flights_6m_source_path + "*.parquet")
+weather_raw_df = spark.read.option("header", "true").parquet(weather_source_path + "*.parquet")
+stations_raw_df = spark.read.option("header", "true").csv(stations_source_path + "stations.csv.gz")
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC #### Airports and Airlines
+# MAGIC Data from OpenFlights: https://openflights.org/data.html 
+# MAGIC 
+# MAGIC 
+# MAGIC Airports: https://raw.githubusercontent.com/jpatokal/openflights/master/data/airports.dat
+# MAGIC 
+# MAGIC Airlines: https://raw.githubusercontent.com/jpatokal/openflights/master/data/airlines.dat
+
+# COMMAND ----------
+
+# MAGIC %sh
+# MAGIC 
+# MAGIC wget https://raw.githubusercontent.com/jpatokal/openflights/master/data/airports.dat
+# MAGIC 
+# MAGIC ls
+
+# COMMAND ----------
+
+dbutils.fs.mv("file:/databricks/driver/airports.dat", 
+              airports_loc + "raw/airports.dat")
+#dbutils.fs.mv("file:/databricks/driver/airlines.dat", 
+#              airlines_loc + "raw/airlines.dat")
+
+# COMMAND ----------
+
+airports_raw_df = spark.read.option("header", "false").csv(airports_loc + "raw/airports.dat", sep = ",")
+#airlines_raw_df = spark.read.option("header", "false").csv(airlines_loc + "raw/airlines.dat", sep = ",")
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+# MAGIC %md ## Perform pre-processing (Silver)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC #### Clear processed staging folders
+
+# COMMAND ----------
+
+dbutils.fs.rm(flights_loc + "processed", recurse=True)
+dbutils.fs.rm(airlines_loc + "processed", recurse=True)
+dbutils.fs.rm(airports_loc + "processed", recurse=True)
+dbutils.fs.rm(weather_loc + "processed", recurse=True)
+dbutils.fs.rm(stations_loc + "processed", recurse=True)
+
+# COMMAND ----------
+
+# MAGIC %md 
+# MAGIC ### Flight data pre-processing
+
+# COMMAND ----------
+
+def process_flight_data(df):
+  cols = df.columns
+  cols.append('IN_FLIGHT_AIR_DELAY')
+  return (
+    df
+    .withColumn('IN_FLIGHT_AIR_DELAY', f.lit(df['ARR_DELAY'] - df['DEP_DELAY'] )) # this column is the time difference between arrival and departure and does not include total flight delay
+#    .withColumn("time", from_unixtime("time"))
+#    .withColumnRenamed("device_id", "p_device_id")
+#    .withColumn("time", col("time").cast("timestamp"))
+#    .withColumn("dte", col("time").cast("date"))
+#    .withColumn("p_device_id", col("p_device_id").cast("integer"))
+#    .select("dte", "time", "heartrate", "name", "p_device_id")
+    .select(cols)
+    )
+  
+  
+flights_processed_df = process_flight_data(flights_raw_df)
+
+# COMMAND ----------
+
+display(flights_processed_df)
+
+# COMMAND ----------
+
+# todo - write to preprocessed directory
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Stations data pre-processing
+
+# COMMAND ----------
+
+def process_station_data(df):
+  return (df.withColumn("STATION_USAF_WBAN", f.concat(f.col("usaf"), f.col("wban")))
+         .select(f.col("STATION_USAF_WBAN"),
+                    f.col("name").alias("STATION_NAME"),
+                    f.col("country").alias("STATION_COUNTRY"),
+                    f.col("state").alias("STATION_STATE"),
+                    f.col("call").alias("STATION_CALL"),
+                    f.col("lat").alias("STATION_LAT"),
+                    f.col("lon").alias("STATION_LONG"),
+                    f.col("elev").alias("AIRPORT_ELEV"),
+                    f.col("begin").alias("STATION_BEGIN"),
+                    f.col("end").alias("STATION_END")
+                   )
+         )
+  
+stations_processed_df = process_station_data(stations_raw_df)
+
+# COMMAND ----------
+
+(stations_processed_df.write
+ .mode("overwrite")
+ .format("parquet")
+ .partitionBy("STATION_STATE")
+ .save(stations_loc + "processed"))
+
+parquet_table = f"parquet.`{stations_loc}processed`"
+partitioning_scheme = "STATION_STATE string"
+
+DeltaTable.convertToDelta(spark, parquet_table, partitioning_scheme)
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC 
+# MAGIC DROP TABLE IF EXISTS stations_processed;
+# MAGIC 
+# MAGIC CREATE TABLE stations_processed
+# MAGIC USING DELTA
+# MAGIC LOCATION "/airline_delays/$username/DLRS/stations/processed"
+
+# COMMAND ----------
+
+stations_processed = spark.read.table("stations_processed")
+stations_processed.count()
+
+# COMMAND ----------
+
+# MAGIC  %md
+# MAGIC ### Airport data pre-processing
+
+# COMMAND ----------
+
+def process_airport_data(df):
+  return (df.select(f.col("_c0").alias("AIRPORT_ID"),
+                    f.col("_c1").alias("AIRPORT_NAME"),
+                    f.col("_c2").alias("AIRPORT_CITY"),
+                    f.col("_c3").alias("AIRPORT_COUNTRY"),
+                    f.col("_c4").alias("IATA"),
+                    f.col("_c5").alias("ICAO"),
+                    f.col("_c6").alias("AIRPORT_LAT"),
+                    f.col("_c7").alias("AIRPORT_LONG"),
+                    f.col("_c8").alias("AIRPORT_ALT"),
+                    f.col("_c9").alias("AIRPORT_TZ_OFFSET"),
+                    f.col("_c10").alias("AIRPORT_DST"),
+                    f.col("_c11").alias("AIRPORT_TZ_NAME"),
+                    f.col("_c12").alias("AIRPORT_TYPE"),
+                    f.col("_c13").alias("AIRPORT_SOURCE")
+                   )
+          .where('AIRPORT_COUNTRY = "United States" OR AIRPORT_COUNTRY = "Puerto Rico" OR AIRPORT_COUNTRY = "Virgin Islands"')
+         )
+  
+airports_processed_df = process_airport_data(airports_raw_df)
+
+# COMMAND ----------
+
+(airports_processed_df.write
+ .mode("overwrite")
+ .format("parquet")
+ .partitionBy("AIRPORT_TZ_NAME")
+ .save(airports_loc + "processed"))
+
+parquet_table = f"parquet.`{airports_loc}processed`"
+partitioning_scheme = "AIRPORT_TZ_NAME string"
+
+DeltaTable.convertToDelta(spark, parquet_table, partitioning_scheme)
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC 
+# MAGIC DROP TABLE IF EXISTS airports_processed;
+# MAGIC 
+# MAGIC CREATE TABLE airports_processed
+# MAGIC USING DELTA
+# MAGIC LOCATION "/airline_delays/$username/DLRS/airports/processed"
+
+# COMMAND ----------
+
+airports_processed = spark.read.table("airports_processed")
+airports_processed.count()
+
+# COMMAND ----------
+
+# MAGIC %md # 4. EDA
+# MAGIC 
+# MAGIC ## Flights EDA
 # MAGIC 
 # MAGIC Schema for flights: https://annettegreiner.com/vizcomm/OnTime_readme.html
 
 # COMMAND ----------
 
-airlines = spark.read.option("header", "true").parquet(f"dbfs:/mnt/mids-w261/data/datasets_final_project/parquet_airlines_data/*.parquet")
-#display(airlines.sample(False, 0.00001))
+flights_df.printSchema()
 
 # COMMAND ----------
 
-airlines.printSchema()
+f'{flights_df.count():,}'
 
 # COMMAND ----------
 
-f'{airlines.count():,}'
+# we can filter out the first three months ourselves
+#flights_df_sample = flights_df.where('(ORIGIN = "ORD" OR ORIGIN = "ATL") AND QUARTER = 1 and YEAR = 2015').sample(False, .10, seed = 42)
+# Or the code below results in the equivalent
+flights_df_sample = flights_3m_df.sample(False, .10, seed = 42)
 
 # COMMAND ----------
 
-airlines_sample = airlines.where('(ORIGIN = "ORD" OR ORIGIN = "ATL") AND QUARTER = 1 and YEAR = 2015').sample(False, .10, seed = 42)
+display(flights_df_sample)
 
 # COMMAND ----------
 
-display(airlines_sample)
+flights_df_sample.count()
 
 # COMMAND ----------
 
-airlines_sample.count()
-
-# COMMAND ----------
-
-airlines_sample.dtypes
+flights_df_sample.dtypes
 
 # COMMAND ----------
 
@@ -74,23 +381,13 @@ def get_dtype(df,colname):
 
 # COMMAND ----------
 
-get_dtype(airlines_sample, 'ORIGIN')
+get_dtype(flights_df_sample, 'ORIGIN')
 
 # COMMAND ----------
-
-airlines_sample.columns
-
-# COMMAND ----------
-
-airlines_sample['ORIGIN']
-
-# COMMAND ----------
-
-
 
 # Custom-made class to assist with EDA on this dataset
 # The code is generalizable. However, specific decisions on plot types were made because
-# all our features are categorical
+# most features are categorical
 class Analyze:
     def __init__(self, df):
         self.df = df.toPandas()
@@ -106,7 +403,6 @@ class Analyze:
         fig, ax = plt.subplots(nrows=round(len(self.df.columns)), ncols=2, figsize=(16,5*round(len(self.df.columns))))
         all_cols=[]
         for col in self.df.columns:
-            #if col == 'MachineIdentifier': continue
             if self.df[col].dtype.name == 'object'  or self.df[col].dtype.name == 'category': 
                 self.df[col] = self.df[col].astype('str')
             all_cols.append(col)
@@ -176,7 +472,7 @@ class Analyze:
 
 # COMMAND ----------
 
-# analyzer = Analyze(airlines_sample)
+# analyzer = Analyze(flights_df_sample)
 # analyzer.print_eda_summary()
 
 # COMMAND ----------
@@ -186,32 +482,29 @@ class Analyze:
 # COMMAND ----------
 
 sns.set(rc={'figure.figsize':(100,100)})
-sns.heatmap(airlines_sample.toPandas().corr(), cmap='RdBu_r', annot=True, center=0.0)
-
-# COMMAND ----------
-
+sns.heatmap(flights_df_sample.toPandas().corr(), cmap='RdBu_r', annot=True, center=0.0)
 sns.set(rc={'figure.figsize':(10,10)})
 
 # COMMAND ----------
 
-airlines_sample.where('DEP_DELAY < 0').count() / airlines_sample.count() # This statistic explains that 47% of flights depart earlier
+flights_df_sample.where('DEP_DELAY < 0').count() / flights_df_sample.count() # This statistic explains that 47% of flights depart earlier
 
 # COMMAND ----------
 
-airlines_sample.where('DEP_DELAY == 0').count() / airlines_sample.count()  # This statistic explains that 6.9% of flights depart EXACTLY on time
+flights_df_sample.where('DEP_DELAY == 0').count() / flights_df_sample.count()  # This statistic explains that 6.9% of flights depart EXACTLY on time
 
 # COMMAND ----------
 
-# MAGIC %md ### The cells below are displaying histograms that analyze departures that are on time or early
+# MAGIC %md ### The cells below display histograms that analyze departures that are on time or early
 
 # COMMAND ----------
 
-bins, counts = airlines_sample.select('DEP_DELAY').where('DEP_DELAY <= 0').rdd.flatMap(lambda x: x).histogram(100)
+bins, counts = flights_df_sample.select('DEP_DELAY').where('DEP_DELAY <= 0').rdd.flatMap(lambda x: x).histogram(100)
 plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
 
-bins, counts = airlines_sample.select('DEP_DELAY').where('DEP_DELAY <= 0 AND DEP_DELAY > -25').rdd.flatMap(lambda x: x).histogram(50)
+bins, counts = flights_df_sample.select('DEP_DELAY').where('DEP_DELAY <= 0 AND DEP_DELAY > -25').rdd.flatMap(lambda x: x).histogram(50)
 plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
@@ -220,17 +513,17 @@ plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
 
-bins, counts = airlines_sample.select('DEP_DELAY').where('DEP_DELAY > 0').rdd.flatMap(lambda x: x).histogram(100)
+bins, counts = flights_df_sample.select('DEP_DELAY').where('DEP_DELAY > 0').rdd.flatMap(lambda x: x).histogram(100)
 plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
 
-bins, counts = airlines_sample.select('DEP_DELAY').where('DEP_DELAY > 0 AND DEP_DELAY < 300').rdd.flatMap(lambda x: x).histogram(50)
+bins, counts = flights_df_sample.select('DEP_DELAY').where('DEP_DELAY > 0 AND DEP_DELAY < 300').rdd.flatMap(lambda x: x).histogram(50)
 plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
 
-bins, counts = airlines_sample.select('DEP_DELAY').where('DEP_DELAY > -25 AND DEP_DELAY < 50').rdd.flatMap(lambda x: x).histogram(50)
+bins, counts = flights_df_sample.select('DEP_DELAY').where('DEP_DELAY > -25 AND DEP_DELAY < 50').rdd.flatMap(lambda x: x).histogram(50)
 plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
@@ -250,16 +543,15 @@ plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
 
-from pyspark.sql.functions import lit
 # airlines['ARR_DELAY_CONTRIB'] = airlines['ARR_DELAY'] - airlines['DEP_DELAY'] # contribution of the arrival delay ONLY
 # df.withColumn("ARR_DELAY_CONTRIB",col("salary")* -1)
 # airlines.select('ARR_DELAY','DEP_DELAY', (airlines.ARR_DELAY - airlines.DEP_DELAY).alias('ARR_')).show()
-airlines_sample = airlines_sample.withColumn('IN_FLIGHT_AIR_DELAY', lit(airlines_sample['ARR_DELAY'] - airlines_sample['DEP_DELAY'])) # this column is the time difference between arrival and departure and does not include total flight delay
-airlines_sample.select('IN_FLIGHT_AIR_DELAY').show()
+flights_df_sample = flights_df_sample.withColumn('IN_FLIGHT_AIR_DELAY', f.lit(flights_df_sample['ARR_DELAY'] - flights_df_sample['DEP_DELAY'])) # this column is the time difference between arrival and departure and does not include total flight delay
+flights_df_sample.select('IN_FLIGHT_AIR_DELAY').show()
 
 # COMMAND ----------
 
-bins, counts = airlines_sample.select('IN_FLIGHT_AIR_DELAY').where('IN_FLIGHT_AIR_DELAY > -50 AND IN_FLIGHT_AIR_DELAY < 50').rdd.flatMap(lambda x: x).histogram(50)
+bins, counts = flights_df_sample.select('IN_FLIGHT_AIR_DELAY').where('IN_FLIGHT_AIR_DELAY > -50 AND IN_FLIGHT_AIR_DELAY < 50').rdd.flatMap(lambda x: x).histogram(50)
 plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
@@ -276,22 +568,15 @@ plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
 
-display(dbutils.fs.ls("dbfs:/mnt/mids-w261/data/datasets_final_project/weather_data"))
+f'{weather_df.count():,}'
 
 # COMMAND ----------
 
-weather = spark.read.option("header", "true")\
-                    .parquet(f"dbfs:/mnt/mids-w261/data/datasets_final_project/weather_data/*.parquet")
-
-f'{weather.count():,}'
+weather_df.printSchema()
 
 # COMMAND ----------
 
-weather.printSchema()
-
-# COMMAND ----------
-
-display(weather)
+display(weather_df)
 
 # COMMAND ----------
 
@@ -415,32 +700,6 @@ plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
 
-# MAGIC %md # Stations
-
-# COMMAND ----------
-
-stations = spark.read.option("header", "true").csv("dbfs:/mnt/mids-w261/data/DEMO8/gsod/stations.csv.gz")
-stations = stations.withColumnRenamed("name","station_name")
-
-# COMMAND ----------
-
-display(stations)
-
-# COMMAND ----------
-
-stations.printSchema()
-
-# COMMAND ----------
-
-display(stations.where(f.col('station_name').contains('BIG BEAR')))
-
-# COMMAND ----------
-
-#concatenate usaf and wban
-stations = stations.withColumn("USAF_WBAN", f.concat(f.col("usaf"), f.col("wban")))
-
-# COMMAND ----------
-
 # MAGIC %md
 # MAGIC ## Joining Weather to Station Data
 # MAGIC Note this is for exploratory purposes. The most efficient way to do this will be to first identify the station associated with each airport, add a column for that to the flights data, and then join directly flights to weather. Note this will require a composite key because we care about both **time** and **location**. Note the cell after the initial join where the joined table is displayed with a filter will take a long time to load.
@@ -490,55 +749,6 @@ display(joined_weather_cache.select(["STATION_PAD", "NAME", "station_name", "usa
 
 display(no_id_match.select(["STATION_PAD", "STATION", "NAME", "LATITUDE", "LONGITUDE", "SOURCE"]).distinct())
 #no_id_match.printSchema()
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC # Airports
-# MAGIC Data from OpenFlights: https://openflights.org/data.html 
-
-# COMMAND ----------
-
-display(dbutils.fs.ls("dbfs:/openflights"))
-
-# COMMAND ----------
-
-airports = spark.read.option("header", "false").csv("dbfs:/openflights/airports.csv", sep = ",")
-
-# COMMAND ----------
-
-display(airports)
-
-# COMMAND ----------
-
-# rename the columns
-airports = airports.select(f.col("_c0").alias("Airport ID"),
-                           f.col("_c1").alias("Name"),
-                           f.col("_c2").alias("City"),
-                           f.col("_c3").alias("Country"),
-                           f.col("_c4").alias("IATA"),
-                           f.col("_c5").alias("ICAO"),
-                           f.col("_c6").alias("Latitude"),
-                           f.col("_c7").alias("Longitude"),
-                           f.col("_c8").alias("Altitude"),
-                           f.col("_c9").alias("Timezone"),
-                           f.col("_c10").alias("DST"),
-                           f.col("_c11").alias("LTz database time zone"),
-                           f.col("_c12").alias("Type"),
-                           f.col("_c13").alias("Source")
-                          )
-
-# COMMAND ----------
-
-display(airports)
-
-# COMMAND ----------
-
-airports = airports.where('Country = "United States" OR Country = "Puerto Rico" OR Country = "Virgin Islands"')
-
-# COMMAND ----------
-
-airports.count()
 
 # COMMAND ----------
 
