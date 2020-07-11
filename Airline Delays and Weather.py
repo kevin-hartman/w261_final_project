@@ -22,7 +22,6 @@ import matplotlib.pyplot as plt
 import numpy as np 
 import pandas as pd
 import seaborn as sns
-from pyspark.sql.functions import udf
 sqlContext = SQLContext(sc)
 
 # COMMAND ----------
@@ -365,10 +364,6 @@ display(weather_distinct_ids)
 
 # COMMAND ----------
 
-
-
-# COMMAND ----------
-
 display(weather_subset)
 
 # COMMAND ----------
@@ -649,7 +644,7 @@ closest_stations = find_closest_station(airports_rdd,stations_rdd).cache()
 
 # COMMAND ----------
 
-closest_stations.collect()
+#closest_stations.collect()
 
 # COMMAND ----------
 
@@ -665,7 +660,7 @@ airports_stations_origin = airports_stations_origin.withColumnRenamed("nearest_s
 
 airports_stations_dest = airports_stations_dest.withColumnRenamed("IATA", "IATA_DEST")
 airports_stations_dest = airports_stations_dest.withColumnRenamed("nearest_station_id", "nearest_station_id_DEST")
-airports_stations_dest = airports_stations_dest.withColumnRenamed("nearest_station_dist", "nearest_station_id_DEST")
+airports_stations_dest = airports_stations_dest.withColumnRenamed("nearest_station_dist", "nearest_station_dist_DEST")
 display(airports_stations_origin)
 
 # COMMAND ----------
@@ -712,59 +707,19 @@ display(airports_and_flights)
 
 # COMMAND ----------
 
-from pytz import timezone 
-import datetime
-timezone = airlinelocal = pytz.timezone ("America/Los_Angeles")
-
-naive = datetime.datetime.strptime ("2001-2-3 10:11:12", "%Y-%m-%d %H:%M:%S")
-local_dt = local.localize(naive, is_dst=None)
-utc_dt = local_dt.astimezone(pytz.utc)
-
-def convertToUTC(flightDate, CRSTime, timezone):
-    utc = timezone('UTC')
-    # utcDt = datetime(2002, 10, 27, 6, 0, 0, tzinfo=utc)
-
-# COMMAND ----------
+from pytz import timezone #todo move to imports
+from datetime import  datetime, timedelta #todo move this to imports section
 
 def get_utc_datetime(year, month, day, hour, tz):
   tz = timezone(tz)
   utc = timezone('UTC')
-#   hour = int(hour) + int(offset)
-#   if (hour < 0):
-#     day = int(day) - 1 if day is not 1 else 
-#     hour = hour + 24
-
-  local_dt = datetime.datetime(int(year), int(month), int(day), int(hour), 0, 0, tzinfo=tz)
+  
+  local_dt = datetime(int(year), int(month), int(day), hour=int(hour), tzinfo=tz)
   utc_dt = local_dt.astimezone(utc)
   
   return utc_dt
 
-# COMMAND ----------
-
 get_utc_datetime = udf(get_utc_datetime)
-joined_flights_stations = airports_and_flights.withColumn("FLIGHT_TIME_UTC", 
-                                                                      get_utc_datetime(airports_and_flights["YEAR"],\
-                                                                               airports_and_flights["MONTH"],\
-                                                                               airports_and_flights["DAY_OF_MONTH"],\
-                                                                               get_flight_hour(airports_and_flights["CRS_DEP_TIME"]),\
-                                                                               airports_and_flights["LTz database time zone"]))
-
-# COMMAND ----------
-
-display(joined_flights_stations)
-
-# COMMAND ----------
-
-from datetime import timedelta #todo move this to imports section
-def get_two_hour_adjusted_datetime(current_datetime):
-  return (current_datetime - timedelta(hours=2))
-
-
-# COMMAND ----------
-
-# MAGIC %md ## Now we will create composite keys based on the station id, flight and weather measurement time from the joined weather station dataset
-
-# COMMAND ----------
 
 # In Weather: StationID_MeasurementMonth_MeasurementDay_MeasurementHour
 def get_flight_hour(flight_time):
@@ -776,25 +731,42 @@ def get_flight_hour(flight_time):
       hour = flight_time[:2]
     return hour
   
-# spark.udf.register("get_flight_hour", get_flight_hour)
 get_flight_hour = udf(get_flight_hour)
-get_two_hour_adjusted_flight_hour = udf(get_two_hour_adjusted_flight_hour)
-# joined_flight_stations = joined_flights_stations.withColumn("FLIGHT_HOUR", f.lit(lambda x: get_flight_hour(x["CRS_DEP_TIME"])))
-# display(joined_flight_stations.select("CRS_DEP_TIME", get_flight_hour("CRS_DEP_TIME")))
 
-joined_flights_stations = joined_flights_stations.withColumn("ORIGIN_Weather_Key",\
-                                                                      f.concat(joined_flights_stations["nearest_station_id_ORIGIN"],\
-                                                                               joined_flights_stations["YEAR"],\
-                                                                               joined_flights_stations["MONTH"],\
-                                                                               joined_flights_stations["DAY_OF_MONTH"],\
-                                                                               get_two_hour_adjusted_flight_hour(joined_flights_stations["CRS_DEP_TIME"])))
 
-joined_flights_stations = joined_flights_stations.withColumn("DEST_Weather_Key",\
-                                                                      f.concat(joined_flights_stations["nearest_station_id_DEST"],\
-                                                                               joined_flights_stations["YEAR"],\
-                                                                               joined_flights_stations["MONTH"],\
-                                                                               joined_flights_stations["DAY_OF_MONTH"],\
-                                                                               get_two_hour_adjusted_flight_hour(joined_flights_stations["CRS_DEP_TIME"])))
+def get_two_hour_adjusted_datetime(current_datetime):
+  return (current_datetime - timedelta(hours=2))
+
+get_two_hour_adjusted_datetime = udf(get_two_hour_adjusted_datetime)
+
+def get_datetime_string(d):
+  return d.strftime("%Y%m%d%H")
+
+get_datetime_string = udf(get_datetime_string)
+
+# COMMAND ----------
+
+# MAGIC %md ## Create Composite Keys for joining weather data to flight data
+
+# COMMAND ----------
+
+joined_flights_stations = airports_and_flights.withColumn("CRS_DEP_TIME_HOUR", get_flight_hour(airports_and_flights["CRS_DEP_TIME"]))\
+                                              .withColumn("FLIGHT_TIME_UTC",
+                                                          get_utc_datetime("YEAR",\
+                                                                           "MONTH",\
+                                                                           "DAY_OF_MONTH",\
+                                                                           get_flight_hour("CRS_DEP_TIME"),\
+                                                                           "LTz database time zone"))\
+                                              .withColumn("WEATHER_PREDICTION_TIME_UTC",
+                                                          get_two_hour_adjusted_datetime("FLIGHT_TIME_UTC"))\
+                                              .withColumn("FLIGHT_TIME_UTC",
+                                                           get_datetime_string("FLIGHT_TIME_UTC"))\
+                                              .withColumn("WEATHER_PREDICTION_TIME_UTC",
+                                                          get_datetime_string("WEATHER_PREDICTION_TIME_UTC"))\
+                                              .withColumn("ORIGIN_WEATHER_ID",
+                                                          f.concat_ws("-", "nearest_station_id_ORIGIN", "WEATHER_PREDICTION_TIME_UTC"))\
+                                              .withColumn("DEST_WEATHER_ID",
+                                                          f.concat_ws("-", "nearest_station_id_DEST", "WEATHER_PREDICTION_TIME_UTC"))
 
 # COMMAND ----------
 
@@ -802,22 +774,12 @@ display(joined_flights_stations)
 
 # COMMAND ----------
 
-# In Weather: StationID_MeasurementMonth_MeasurementDay_MeasurementHour
-def get_two_hour_adjusted_flight_hour(flight_time):
-    flight_time = str(flight_time)
-    hour = None
-    if len(flight_time) == 3:
-      hour = int(flight_time[0])
-    elif len(flight_time) == 4:
-      hour = int(flight_time[:2])
-    else:
-      return hour
-    hour = hour - 2
-    if hour == -1:
-      hour = 23
-    elif hour == -2:
-      hour = 22
-    return str(hour)
+# MAGIC %md ## Create Composite keys for joining weather to flights
+
+# COMMAND ----------
+
+display(weather_subset)
+#STATION_PAD is the weather station ID
 
 # COMMAND ----------
 
