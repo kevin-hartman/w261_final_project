@@ -774,12 +774,63 @@ display(joined_flights_stations)
 
 # COMMAND ----------
 
+#joined_flights_stations = joined_flights_stations.withColumn("CRS_DEP_TIME_LENGTH", f.length("CRS_DEP_TIME"))
+#display(joined_flights_stations.agg(f.max("CRS_DEP_TIME_LENGTH")))
+display(joined_flights_stations.where("ORIGIN_WEATHER_ID IS NULL"))
+
+# COMMAND ----------
+
 # MAGIC %md ## Create Composite keys for joining weather to flights
+
+# COMMAND ----------
+
+def create_composite_weather_key(d, k):
+    datestr = d.strftime("%Y-%m-%dT%H:%M:%S.%f%z")
+    date, time = datestr.split("T")
+    date_components = date.split("-")
+    id_date_portion = "".join(date_components)
+    id_hour_portion = time[:2]
+    id_datetime_portion = id_date_portion+id_hour_portion
+    the_id = "-".join([k,id_datetime_portion])
+    return the_id
+create_composite_weather_key = udf(create_composite_weather_key)
+
+# COMMAND ----------
+
+weather_subset = weather_subset.where("STATION IS NOT NULL").withColumn("WEATHER_KEY",create_composite_weather_key("DATE","STATION_PAD"))
 
 # COMMAND ----------
 
 display(weather_subset)
 #STATION_PAD is the weather station ID
+
+# COMMAND ----------
+
+display(weather.where("STATION IS NULL"))
+
+# COMMAND ----------
+
+# MAGIC %md ## Join Weather to Flights
+
+# COMMAND ----------
+
+combined_raw_features = joined_flights_stations.join(weather_subset, joined_flights_stations.ORIGIN_WEATHER_ID == weather_subset.WEATHER_KEY, "left")
+
+# COMMAND ----------
+
+display(combined_raw_features)
+
+# COMMAND ----------
+
+combined_raw_features.printSchema()
+
+# COMMAND ----------
+
+combined_raw_features_2 = combined_raw_features.join(weather_subset, combined_raw_features.DEST_WEATHER_ID == weather_subset.WEATHER_KEY, "left")
+
+# COMMAND ----------
+
+combined_raw_features.write.parquet("dbfs:/staging/combined_raw_features.parquet")
 
 # COMMAND ----------
 
