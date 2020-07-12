@@ -13,7 +13,7 @@
 # MAGIC ### 1. Introduction
 # MAGIC ### 2. Data Sources
 # MAGIC ### 3. Question Formulation
-# MAGIC ### 4. Pipeline Configuration
+# MAGIC ### 4. Data Lake Prep
 # MAGIC ### 5. EDA
 # MAGIC ### 6. Feature Engineering
 # MAGIC ### 7. Algorithm Exploration
@@ -46,7 +46,20 @@
 
 # COMMAND ----------
 
-# MAGIC %md # 3. Pipeline Configuration
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC # WARNING: DO NOT RUN CODE IN THE NEXT SECTION UNLESS YOU NEED TO RECONSTRUCT THE BRONZE AND SILVER  DATA LAKES
+# MAGIC 
+# MAGIC 
+# MAGIC 
+# MAGIC ### Please start execution from Section 4. EDA to load from already processed (silver) data
+
+# COMMAND ----------
+
+# MAGIC %md # 3. Data Lake Prep
 # MAGIC 
 # MAGIC ### Imports
 
@@ -65,7 +78,7 @@ from delta.tables import DeltaTable
 
 # COMMAND ----------
 
-# MAGIC %md ### Prep Database for Staging
+# MAGIC %md ### Prep delta lakes for staging areas - bronze & silver
 
 # COMMAND ----------
 
@@ -77,7 +90,6 @@ spark.sql(f"USE airline_delays_{username}")
 flights_loc = f"/airline_delays/{username}/DLRS/flights/"
 flights_3m_loc = f"/airline_delays/{username}/DLRS/flights_3m/"
 flights_6m_loc = f"/airline_delays/{username}/DLRS/flights_6m/"
-airlines_loc = f"/airline_delays/{username}/DLRS/airlines/"
 airports_loc = f"/airline_delays/{username}/DLRS/airports/"
 weather_loc = f"/airline_delays/{username}/DLRS/weather/"
 stations_loc = f"/airline_delays/{username}/DLRS/stations/"
@@ -86,104 +98,147 @@ spark.conf.set("spark.sql.shuffle.partitions", 8)
 
 # COMMAND ----------
 
-# MAGIC %md ### Download data and store locally (Bronze)
+# MAGIC %md ### Download and store data locally (Bronze)
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC #### Clear raw staging folders
+# MAGIC #### Clear raw (bronze) landing zone
 
 # COMMAND ----------
 
 dbutils.fs.rm(flights_loc + "raw", recurse=True)
-dbutils.fs.rm(airlines_loc + "raw", recurse=True)
+dbutils.fs.rm(flights_3m_loc + "raw", recurse=True)
+dbutils.fs.rm(flights_6m_loc + "raw", recurse=True)
 dbutils.fs.rm(airports_loc + "raw", recurse=True)
+dbutils.fs.rm(airports_loc + "land", recurse=True)
+dbutils.fs.rm(airports_loc + "stage", recurse=True)
 dbutils.fs.rm(weather_loc + "raw", recurse=True)
 dbutils.fs.rm(stations_loc + "raw", recurse=True)
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC #### Flights and Weather
+# MAGIC #### Flights, Weather and Stations
 # MAGIC 
 # MAGIC Data from mids-w261 project folder
 
 # COMMAND ----------
 
 source_path = "dbfs:/mnt/mids-w261/data/datasets_final_project/"
-demo8_source_path = "dbfs:/mnt/mids-w261/data/DEMO8/"
-display(dbutils.fs.ls(source_path))
-
 flights_source_path = source_path + "parquet_airlines_data/"
 flights_3m_source_path = source_path + "parquet_airlines_data_3m/"
 flights_6m_source_path = source_path + "parquet_airlines_data_6m/"
 weather_source_path = source_path + "weather_data/"
+
+demo8_source_path = "dbfs:/mnt/mids-w261/data/DEMO8/"
 stations_source_path = demo8_source_path + "gsod/"
 
 # COMMAND ----------
 
-
-
-# COMMAND ----------
-
 # MAGIC %md
-# MAGIC ##### TODO: Decide if we want to move the files locally. If not, just go direct to the source_path.
-
-# COMMAND ----------
-
-flights_raw_df = spark.read.option("header", "true").parquet(flights_source_path + "*.parquet")
-flights_raw_3m_df = spark.read.option("header", "true").parquet(flights_3m_source_path + "*.parquet")
-flights_raw_6m_df = spark.read.option("header", "true").parquet(flights_6m_source_path + "*.parquet")
-weather_raw_df = spark.read.option("header", "true").parquet(weather_source_path + "*.parquet")
-stations_raw_df = spark.read.option("header", "true").csv(stations_source_path + "stations.csv.gz")
-
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC #### Airports and Airlines
+# MAGIC #### Airports
 # MAGIC Data from OpenFlights: https://openflights.org/data.html 
-# MAGIC 
-# MAGIC 
-# MAGIC Airports: https://raw.githubusercontent.com/jpatokal/openflights/master/data/airports.dat
-# MAGIC 
-# MAGIC Airlines: https://raw.githubusercontent.com/jpatokal/openflights/master/data/airlines.dat
 
 # COMMAND ----------
 
-# MAGIC %sh
-# MAGIC 
-# MAGIC wget https://raw.githubusercontent.com/jpatokal/openflights/master/data/airports.dat
-# MAGIC 
+airports_source_url = "https://raw.githubusercontent.com/jpatokal/openflights/master/data/airports.dat"
+
+# COMMAND ----------
+
+# MAGIC %python
+# MAGIC import os
+# MAGIC os.environ['airports_source_url'] = airports_source_url
+
+# COMMAND ----------
+
+# MAGIC %sh 
+# MAGIC wget $airports_source_url
 # MAGIC ls
 
 # COMMAND ----------
 
 dbutils.fs.mv("file:/databricks/driver/airports.dat", 
-              airports_loc + "raw/airports.dat")
-#dbutils.fs.mv("file:/databricks/driver/airlines.dat", 
-#              airlines_loc + "raw/airlines.dat")
+              airports_loc + "land/airports.dat")
 
 # COMMAND ----------
 
-airports_raw_df = spark.read.option("header", "false").csv(airports_loc + "raw/airports.dat", sep = ",")
-#airlines_raw_df = spark.read.option("header", "false").csv(airlines_loc + "raw/airlines.dat", sep = ",")
+airports_land_df = spark.read.option("header", "false").csv(airports_loc + "land/airports.dat", sep = ",")
 
 # COMMAND ----------
 
-
+def add_airport_data_headers(df):
+  return (df.select(f.col("_c0").alias("AIRPORT_ID"),
+                    f.col("_c1").alias("AIRPORT_NAME"),
+                    f.col("_c2").alias("AIRPORT_CITY"),
+                    f.col("_c3").alias("AIRPORT_COUNTRY"),
+                    f.col("_c4").alias("IATA"),
+                    f.col("_c5").alias("ICAO"),
+                    f.col("_c6").alias("AIRPORT_LAT"),
+                    f.col("_c7").alias("AIRPORT_LONG"),
+                    f.col("_c8").alias("AIRPORT_ALT"),
+                    f.col("_c9").alias("AIRPORT_TZ_OFFSET"),
+                    f.col("_c10").alias("AIRPORT_DST"),
+                    f.col("_c11").alias("AIRPORT_TZ_NAME"),
+                    f.col("_c12").alias("AIRPORT_TYPE"),
+                    f.col("_c13").alias("AIRPORT_SOURCE")
+                   )
+         )
+  
+airports_stage_df = add_airport_data_headers(airports_land_df)
 
 # COMMAND ----------
 
-
-
-# COMMAND ----------
-
-
+airports_stage_path = airports_loc + "stage/"
 
 # COMMAND ----------
 
-# MAGIC %md ## Perform pre-processing (Silver)
+(airports_stage_df.write
+ .mode("overwrite")
+ .format("parquet")
+ .partitionBy("AIRPORT_TZ_NAME")
+ .save(airports_stage_path))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC #### Ingest data from staging or source zone (wherever data currently resides) and place into the bronze zone (in raw format)
+
+# COMMAND ----------
+
+flights_source_df = spark.read.option("header", "true").parquet(flights_source_path + "*.parquet")
+flights_source_3m_df = spark.read.option("header", "true").parquet(flights_3m_source_path + "*.parquet")
+flights_source_6m_df = spark.read.option("header", "true").parquet(flights_6m_source_path + "*.parquet")
+weather_source_df = spark.read.option("header", "true").parquet(weather_source_path + "*.parquet")
+stations_source_df = spark.read.option("header", "true").csv(stations_source_path + "stations.csv.gz")
+airports_source_df = spark.read.option("header", "true").parquet(airports_stage_path)
+
+# COMMAND ----------
+
+flights_source_df.write.format("delta").mode("overwrite").save(flights_loc + "raw")
+flights_source_3m_df.write.format("delta").mode("overwrite").save(flights_3m_loc + "raw")
+flights_source_6m_df.write.format("delta").mode("overwrite").save(flights_6m_loc + "raw")
+weather_source_df.write.format("delta").mode("overwrite").save(weather_loc + "raw")
+stations_source_df.write.format("delta").mode("overwrite").save(stations_loc + "raw")
+airports_source_df.write.format("delta").mode("overwrite").save(airports_loc + "raw")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC #### Re-read raw files as delta lake
+
+# COMMAND ----------
+
+flights_raw_df = spark.read.format("delta").load(flights_loc + "raw")
+flights_3m_raw_df = spark.read.format("delta").load(flights_3m_loc + "raw")
+flights_6m_raw_df = spark.read.format("delta").load(flights_6m_loc + "raw")
+weather_raw_df = spark.read.format("delta").load(weather_loc + "raw")
+stations_raw_df = spark.read.format("delta").load(stations_loc + "raw")
+airports_raw_df = spark.read.format("delta").load(airports_loc + "raw")
+
+# COMMAND ----------
+
+# MAGIC %md ## Perform data processing for analysis (Silver)
 
 # COMMAND ----------
 
@@ -192,8 +247,13 @@ airports_raw_df = spark.read.option("header", "false").csv(airports_loc + "raw/a
 
 # COMMAND ----------
 
+dbutils.fs.rm(weather_loc + "processed", recurse=True)
+
+# COMMAND ----------
+
 dbutils.fs.rm(flights_loc + "processed", recurse=True)
-dbutils.fs.rm(airlines_loc + "processed", recurse=True)
+dbutils.fs.rm(flights_3m_loc + "processed", recurse=True)
+dbutils.fs.rm(flights_6m_loc + "processed", recurse=True)
 dbutils.fs.rm(airports_loc + "processed", recurse=True)
 dbutils.fs.rm(weather_loc + "processed", recurse=True)
 dbutils.fs.rm(stations_loc + "processed", recurse=True)
@@ -219,22 +279,163 @@ def process_flight_data(df):
 #    .select("dte", "time", "heartrate", "name", "p_device_id")
     .select(cols)
     )
-  
-  
+
 flights_processed_df = process_flight_data(flights_raw_df)
+flights_3m_processed_df = process_flight_data(flights_3m_raw_df)
+flights_6m_processed_df = process_flight_data(flights_6m_raw_df)
 
 # COMMAND ----------
 
-display(flights_processed_df)
+(flights_3m_processed_df.write
+ .mode("overwrite")
+ .format("parquet")
+ .partitionBy("DAY_OF_MONTH")
+ .save(flights_3m_loc + "processed"))
+
+parquet_table = f"parquet.`{flights_3m_loc}processed`"
+partitioning_scheme = "DAY_OF_MONTH string"
+
+DeltaTable.convertToDelta(spark, parquet_table, partitioning_scheme)
 
 # COMMAND ----------
 
-# todo - write to preprocessed directory
+# MAGIC %sql
+# MAGIC 
+# MAGIC DROP TABLE IF EXISTS flights_3m_processed;
+# MAGIC 
+# MAGIC CREATE TABLE flights_3m_processed
+# MAGIC USING DELTA
+# MAGIC LOCATION "/airline_delays/$username/DLRS/flights_3m/processed"
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC ### Stations data pre-processing
+(flights_6m_processed_df.write
+ .mode("overwrite")
+ .format("parquet")
+ .partitionBy("DAY_OF_MONTH")
+ .save(flights_6m_loc + "processed"))
+
+parquet_table = f"parquet.`{flights_6m_loc}processed`"
+partitioning_scheme = "DAY_OF_MONTH string"
+
+DeltaTable.convertToDelta(spark, parquet_table, partitioning_scheme)
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC 
+# MAGIC DROP TABLE IF EXISTS flights_6m_processed;
+# MAGIC 
+# MAGIC CREATE TABLE flights_6m_processed
+# MAGIC USING DELTA
+# MAGIC LOCATION "/airline_delays/$username/DLRS/flights_6m/processed"
+
+# COMMAND ----------
+
+(flights_processed_df.write
+ .mode("overwrite")
+ .format("parquet")
+ .partitionBy("DAY_OF_MONTH")
+ .save(flights_loc + "processed"))
+
+parquet_table = f"parquet.`{flights_loc}processed`"
+partitioning_scheme = "DAY_OF_MONTH string"
+
+DeltaTable.convertToDelta(spark, parquet_table, partitioning_scheme)
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC 
+# MAGIC DROP TABLE IF EXISTS flights_processed;
+# MAGIC 
+# MAGIC CREATE TABLE flights_processed
+# MAGIC USING DELTA
+# MAGIC LOCATION "/airline_delays/$username/DLRS/flights/processed"
+
+# COMMAND ----------
+
+# MAGIC  %md
+# MAGIC  ### Weather data pre-processing
+# MAGIC  
+
+# COMMAND ----------
+
+def process_weather_data(df):
+  WND_col = f.split(df['WND'], ',')
+  CIG_col = f.split(df['CIG'], ',')
+  VIS_col = f.split(df['VIS'], ',')
+  TMP_col = f.split(df['TMP'], ',')
+  DEW_col = f.split(df['DEW'], ',')
+  SLP_col = f.split(df['SLP'], ',')
+  df = (df
+    .withColumn("STATION", f.lpad(df.STATION, 11, '0'))
+    # WND Fields [direction angle, quality code, type code, speed rate, speed quality code]
+    .withColumn('WND_Direction_Angle', WND_col.getItem(0).cast('int')) # numerical
+    .withColumn('WND_Quality_Code', WND_col.getItem(1).cast('int')) # categorical
+    .withColumn('WND_Type_Code', WND_col.getItem(2).cast('string')) # categorical
+    .withColumn('WND_Speed_Rate', WND_col.getItem(3).cast('int')) # categorical
+    .withColumn('WND_Speed_Quality_Code', WND_col.getItem(4).cast('int')) # numerical
+    # CIG Fields
+    .withColumn('CIG_Ceiling_Height_Dimension', CIG_col.getItem(0).cast('int')) # numerical 
+    .withColumn('CIG_Ceiling_Quality_Code', CIG_col.getItem(1).cast('int')) # categorical
+    .withColumn('CIG_Ceiling_Determination_Code', CIG_col.getItem(2).cast('string')) # categorical 
+    .withColumn('CIG_CAVOK_code', CIG_col.getItem(3).cast('string')) # categorical/binary
+    # VIS Fields
+    .withColumn('VIS_Distance_Dimension', VIS_col.getItem(0).cast('int')) # numerical
+    .withColumn('VIS_Distance_Quality_Code', VIS_col.getItem(1).cast('int')) # categorical
+    .withColumn('VIS_Variability_Code', VIS_col.getItem(2).cast('string')) # categorical/binary
+    .withColumn('VIS_Quality_Variability_Code', VIS_col.getItem(3).cast('int')) # categorical
+    # TMP Fields
+    .withColumn('TMP_Air_Temp', TMP_col.getItem(0).cast('int')) # numerical
+    .withColumn('TMP_Air_Temp_Quality_Code', TMP_col.getItem(1).cast('string')) # categorical
+    # DEW Fields
+    .withColumn('DEW_Point_Temp', DEW_col.getItem(0).cast('int')) # numerical
+    .withColumn('DEW_Point_Quality_Code', DEW_col.getItem(1).cast('string')) # categorical
+    # SLP Fields
+    .withColumn('SLP_Sea_Level_Pres', SLP_col.getItem(0).cast('int')) # numerical
+    .withColumn('SLP_Sea_Level_Pres_Quality_Code', SLP_col.getItem(1).cast('int')) # categorical
+    .withColumnRenamed("DATE", "WEATHER_DATE")
+    .withColumnRenamed("SOURCE", "WEATHER_SOURCE")
+    .withColumnRenamed("STATION", "WEATHER_STATION")
+       )
+
+
+  cols = set(df.columns)
+  remove_cols = set(['LATITUDE', 'LONGITUDE', 'ELEVATION', 'NAME', 'REPORT_TYPE', 'CALL_SIGN', 'WND', 'CIG','VIS','TMP', 'DEW', 'SLP'])
+  cols = list(cols - remove_cols)
+  return df.select(cols)
+  
+
+weather_processed_df = process_weather_data(weather_raw_df)
+
+# COMMAND ----------
+
+(weather_processed_df.write
+ .mode("overwrite")
+ .format("parquet")
+ .partitionBy("WND_Direction_Angle")
+ .save(weather_loc + "processed"))
+
+parquet_table = f"parquet.`{weather_loc}processed`"
+partitioning_scheme = "WND_Direction_Angle string"
+
+DeltaTable.convertToDelta(spark, parquet_table, partitioning_scheme)
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC 
+# MAGIC DROP TABLE IF EXISTS weather_processed;
+# MAGIC 
+# MAGIC CREATE TABLE weather_processed
+# MAGIC USING DELTA
+# MAGIC LOCATION "/airline_delays/$username/DLRS/weather/processed"
+
+# COMMAND ----------
+
+# MAGIC %md 
+# MAGIC ### Station data pre-processing
 
 # COMMAND ----------
 
@@ -280,35 +481,17 @@ DeltaTable.convertToDelta(spark, parquet_table, partitioning_scheme)
 
 # COMMAND ----------
 
-stations_processed = spark.read.table("stations_processed")
-stations_processed.count()
-
-# COMMAND ----------
-
 # MAGIC  %md
 # MAGIC ### Airport data pre-processing
 
 # COMMAND ----------
 
 def process_airport_data(df):
-  return (df.select(f.col("_c0").alias("AIRPORT_ID"),
-                    f.col("_c1").alias("AIRPORT_NAME"),
-                    f.col("_c2").alias("AIRPORT_CITY"),
-                    f.col("_c3").alias("AIRPORT_COUNTRY"),
-                    f.col("_c4").alias("IATA"),
-                    f.col("_c5").alias("ICAO"),
-                    f.col("_c6").alias("AIRPORT_LAT"),
-                    f.col("_c7").alias("AIRPORT_LONG"),
-                    f.col("_c8").alias("AIRPORT_ALT"),
-                    f.col("_c9").alias("AIRPORT_TZ_OFFSET"),
-                    f.col("_c10").alias("AIRPORT_DST"),
-                    f.col("_c11").alias("AIRPORT_TZ_NAME"),
-                    f.col("_c12").alias("AIRPORT_TYPE"),
-                    f.col("_c13").alias("AIRPORT_SOURCE")
-                   )
+  cols = df.columns
+  return (df.select(cols)
           .where('AIRPORT_COUNTRY = "United States" OR AIRPORT_COUNTRY = "Puerto Rico" OR AIRPORT_COUNTRY = "Virgin Islands"')
          )
-  
+
 airports_processed_df = process_airport_data(airports_raw_df)
 
 # COMMAND ----------
@@ -336,43 +519,64 @@ DeltaTable.convertToDelta(spark, parquet_table, partitioning_scheme)
 
 # COMMAND ----------
 
-airports_processed = spark.read.table("airports_processed")
-airports_processed.count()
+# MAGIC %md # 4. EDA
+# MAGIC 
+# MAGIC #### Load data from processed (silver) staging area
 
 # COMMAND ----------
 
-# MAGIC %md # 4. EDA
-# MAGIC 
+from pyspark.sql import functions as f
+from pyspark.sql.types import StructType, StructField, StringType, DoubleType, IntegerType, NullType, ShortType, DateType, BooleanType, BinaryType
+from pyspark.sql import SQLContext
+import matplotlib.pyplot as plt
+import numpy as np 
+import pandas as pd
+import seaborn as sns
+sqlContext = SQLContext(sc)
+
+from delta.tables import DeltaTable
+
+airports_processed = spark.read.table("airports_processed")
+stations_processed = spark.read.table("stations_processed")
+weather_processed = spark.read.table("weather_processed")
+flights_processed = spark.read.table("flights_processed")
+flights_3m_processed = spark.read.table("flights_3m_processed")
+flights_6m_processed = spark.read.table("flights_6m_processed")
+
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ## Flights EDA
 # MAGIC 
 # MAGIC Schema for flights: https://annettegreiner.com/vizcomm/OnTime_readme.html
 
 # COMMAND ----------
 
-flights_df.printSchema()
+flights_processed.printSchema()
 
 # COMMAND ----------
 
-f'{flights_df.count():,}'
+f'{flights_processed.count():,}'
 
 # COMMAND ----------
 
 # we can filter out the first three months ourselves
-#flights_df_sample = flights_df.where('(ORIGIN = "ORD" OR ORIGIN = "ATL") AND QUARTER = 1 and YEAR = 2015').sample(False, .10, seed = 42)
+#flights_sample = flights_processed.where('(ORIGIN = "ORD" OR ORIGIN = "ATL") AND QUARTER = 1 and YEAR = 2015').sample(False, .10, seed = 42)
 # Or the code below results in the equivalent
-flights_df_sample = flights_3m_df.sample(False, .10, seed = 42)
+flights_sample = flights_3m_processed.sample(False, .10, seed = 42)
 
 # COMMAND ----------
 
-display(flights_df_sample)
+display(flights_sample)
 
 # COMMAND ----------
 
-flights_df_sample.count()
+flights_sample.count()
 
 # COMMAND ----------
 
-flights_df_sample.dtypes
+flights_sample.dtypes
 
 # COMMAND ----------
 
@@ -381,7 +585,7 @@ def get_dtype(df,colname):
 
 # COMMAND ----------
 
-get_dtype(flights_df_sample, 'ORIGIN')
+get_dtype(flights_sample, 'ORIGIN')
 
 # COMMAND ----------
 
@@ -472,7 +676,7 @@ class Analyze:
 
 # COMMAND ----------
 
-# analyzer = Analyze(flights_df_sample)
+# analyzer = Analyze(flights_sample)
 # analyzer.print_eda_summary()
 
 # COMMAND ----------
@@ -482,16 +686,16 @@ class Analyze:
 # COMMAND ----------
 
 sns.set(rc={'figure.figsize':(100,100)})
-sns.heatmap(flights_df_sample.toPandas().corr(), cmap='RdBu_r', annot=True, center=0.0)
+sns.heatmap(flights_sample.toPandas().corr(), cmap='RdBu_r', annot=True, center=0.0)
 sns.set(rc={'figure.figsize':(10,10)})
 
 # COMMAND ----------
 
-flights_df_sample.where('DEP_DELAY < 0').count() / flights_df_sample.count() # This statistic explains that 47% of flights depart earlier
+flights_sample.where('DEP_DELAY < 0').count() / flights_sample.count() # This statistic explains that 47% of flights depart earlier
 
 # COMMAND ----------
 
-flights_df_sample.where('DEP_DELAY == 0').count() / flights_df_sample.count()  # This statistic explains that 6.9% of flights depart EXACTLY on time
+flights_sample.where('DEP_DELAY == 0').count() / flights_sample.count()  # This statistic explains that 6.9% of flights depart EXACTLY on time
 
 # COMMAND ----------
 
@@ -499,7 +703,7 @@ flights_df_sample.where('DEP_DELAY == 0').count() / flights_df_sample.count()  #
 
 # COMMAND ----------
 
-bins, counts = flights_df_sample.select('DEP_DELAY').where('DEP_DELAY <= 0').rdd.flatMap(lambda x: x).histogram(100)
+bins, counts = flights_sample.select('DEP_DELAY').where('DEP_DELAY <= 0').rdd.flatMap(lambda x: x).histogram(100)
 plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
@@ -513,7 +717,7 @@ plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
 
-bins, counts = flights_df_sample.select('DEP_DELAY').where('DEP_DELAY > 0').rdd.flatMap(lambda x: x).histogram(100)
+bins, counts = flights_sample.select('DEP_DELAY').where('DEP_DELAY > 0').rdd.flatMap(lambda x: x).histogram(100)
 plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
@@ -523,7 +727,7 @@ plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
 
-bins, counts = flights_df_sample.select('DEP_DELAY').where('DEP_DELAY > -25 AND DEP_DELAY < 50').rdd.flatMap(lambda x: x).histogram(50)
+bins, counts = flights_sample.select('DEP_DELAY').where('DEP_DELAY > -25 AND DEP_DELAY < 50').rdd.flatMap(lambda x: x).histogram(50)
 plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
@@ -543,15 +747,7 @@ plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
 
-# airlines['ARR_DELAY_CONTRIB'] = airlines['ARR_DELAY'] - airlines['DEP_DELAY'] # contribution of the arrival delay ONLY
-# df.withColumn("ARR_DELAY_CONTRIB",col("salary")* -1)
-# airlines.select('ARR_DELAY','DEP_DELAY', (airlines.ARR_DELAY - airlines.DEP_DELAY).alias('ARR_')).show()
-flights_df_sample = flights_df_sample.withColumn('IN_FLIGHT_AIR_DELAY', f.lit(flights_df_sample['ARR_DELAY'] - flights_df_sample['DEP_DELAY'])) # this column is the time difference between arrival and departure and does not include total flight delay
-flights_df_sample.select('IN_FLIGHT_AIR_DELAY').show()
-
-# COMMAND ----------
-
-bins, counts = flights_df_sample.select('IN_FLIGHT_AIR_DELAY').where('IN_FLIGHT_AIR_DELAY > -50 AND IN_FLIGHT_AIR_DELAY < 50').rdd.flatMap(lambda x: x).histogram(50)
+bins, counts = flights_sample.select('IN_FLIGHT_AIR_DELAY').where('IN_FLIGHT_AIR_DELAY > -50 AND IN_FLIGHT_AIR_DELAY < 50').rdd.flatMap(lambda x: x).histogram(50)
 plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
@@ -568,88 +764,20 @@ plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
 
-f'{weather_df.count():,}'
+f'{weather_processed.count():,}'
 
 # COMMAND ----------
 
-weather_df.printSchema()
+weather_processed.printSchema()
 
 # COMMAND ----------
 
-display(weather_df)
+display(weather_processed)
 
 # COMMAND ----------
 
 # subset to 1Q2015
-# weather_subset = weather.where('DATE >= TO_DATE("01/01/2015", "MM/dd/yyyy") AND DATE <= TO_DATE("03/31/2015", "MM/dd/yyyy")')  # this takes only the first quarter of weather data
-weather_subset = weather 
-weather_subset.count() 
-
-# COMMAND ----------
-
-# exploring station id lengths for join
-weather_w_length = weather.withColumn("STATION_LENGTH", f.length("STATION"))
-display(weather_w_length.agg(f.min("STATION_LENGTH")))
-
-# COMMAND ----------
-
-#Padding IDs
-weather_subset = weather_subset.withColumn("STATION_PAD", f.lpad(weather_subset.STATION, 11, '0'))
-#display(weather_subset.select(f.lpad(weather_subset.STATION, 11, '0').alias('STATION_PAD')))
-# display(weather_subset)
-
-# COMMAND ----------
-
-# WND Fields [direction angle, quality code, type code, speed rate, speed quality code]
-split_col = f.split(weather_subset['WND'], ',')
-weather_subset = weather_subset.withColumn('WND_Direction_Angle', split_col.getItem(0).cast('int')) # numerical
-weather_subset = weather_subset.withColumn('WND_Quality_Code', split_col.getItem(1).cast('int')) # categorical
-weather_subset = weather_subset.withColumn('WND_Type_Code', split_col.getItem(2).cast('string')) # categorical
-weather_subset = weather_subset.withColumn('WND_Speed_Rate', split_col.getItem(3).cast('int')) # categorical
-weather_subset = weather_subset.withColumn('WND_Speed_Quality_Code', split_col.getItem(4).cast('int')) # numerical
-
-# CIG Fields
-split_col = f.split(weather_subset['CIG'], ',')
-weather_subset = weather_subset.withColumn('CIG_Ceiling_Height_Dimension', split_col.getItem(0).cast('int')) # numerical 
-weather_subset = weather_subset.withColumn('CIG_Ceiling_Quality_Code', split_col.getItem(1).cast('int')) # categorical
-weather_subset = weather_subset.withColumn('CIG_Ceiling_Determination_Code', split_col.getItem(2).cast('string')) # categorical 
-weather_subset = weather_subset.withColumn('CIG_CAVOK_code', split_col.getItem(3).cast('string')) # categorical/binary
-
-# VIS Fields
-split_col = f.split(weather_subset['VIS'], ',')
-weather_subset = weather_subset.withColumn('VIS_Distance_Dimension', split_col.getItem(0).cast('int')) # numerical
-weather_subset = weather_subset.withColumn('VIS_Distance_Quality_Code', split_col.getItem(1).cast('int')) # categorical
-weather_subset = weather_subset.withColumn('VIS_Variability_Code', split_col.getItem(2).cast('string')) # categorical/binary
-weather_subset = weather_subset.withColumn('VIS_Quality_Variability_Code', split_col.getItem(3).cast('int')) # categorical
-
-# TMP Fields
-split_col = f.split(weather_subset['TMP'], ',')
-weather_subset = weather_subset.withColumn('TMP_Air_Temp', split_col.getItem(0).cast('int')) # numerical
-weather_subset = weather_subset.withColumn('TMP_Air_Temp_Quality_Code', split_col.getItem(1).cast('string')) # categorical
-
-# DEW Fields
-split_col = f.split(weather_subset['DEW'], ',')
-weather_subset = weather_subset.withColumn('DEW_Point_Temp', split_col.getItem(0).cast('int')) # numerical
-weather_subset = weather_subset.withColumn('DEW_Point_Quality_Code', split_col.getItem(1).cast('string')) # categorical
-
-# SLP Fields
-split_col = f.split(weather_subset['SLP'], ',')
-weather_subset = weather_subset.withColumn('SLP_Sea_Level_Pres', split_col.getItem(0).cast('int')) # numerical
-weather_subset = weather_subset.withColumn('SLP_Sea_Level_Pres_Quality_Code', split_col.getItem(1).cast('int')) # categorical
-
-# Now that the data is split apart, we can transform each column
-
-# COMMAND ----------
-
-weather_distinct_ids = weather_subset.select(f.lpad(weather_subset.STATION, 11, '0').alias('STATION_PAD')).distinct()
-
-# COMMAND ----------
-
-display(weather_distinct_ids)
-
-# COMMAND ----------
-
-display(weather_subset)
+weather_subset = weather_processed.where('WEATHER_DATE >= TO_DATE("01/01/2015", "MM/dd/yyyy") AND WEATHER_DATE <= TO_DATE("03/31/2015", "MM/dd/yyyy")') 
 
 # COMMAND ----------
 
@@ -703,6 +831,22 @@ plt.hist(bins[:-1], bins=bins, weights=counts)
 # MAGIC %md
 # MAGIC ## Joining Weather to Station Data
 # MAGIC Note this is for exploratory purposes. The most efficient way to do this will be to first identify the station associated with each airport, add a column for that to the flights data, and then join directly flights to weather. Note this will require a composite key because we care about both **time** and **location**. Note the cell after the initial join where the joined table is displayed with a filter will take a long time to load.
+
+# COMMAND ----------
+
+# MAGIC %md ### Get Distinct Stations From Weather Data
+# MAGIC This ensures that we only use stations that are valid for our analysis period.
+
+# COMMAND ----------
+
+#create set of distinct ids from weather data
+weather_distinct_ids = weather_processed.select('STATION').distinct()
+
+#join distinct ids to stations tables and subset for matches
+valid_stations = weather_distinct_ids.join(stations_processed,\
+                                           weather_distinct_ids.STATION == stations_processed.STATION_USAF_WBAN,\
+                                           'left').where('STATION_USAF_WBAN IS NOT NULL')
+
 
 # COMMAND ----------
 
