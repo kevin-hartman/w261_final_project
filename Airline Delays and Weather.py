@@ -536,9 +536,25 @@ import matplotlib.pyplot as plt
 import numpy as np 
 import pandas as pd
 import seaborn as sns
+from pytz import timezone 
+from datetime import  datetime, timedelta 
 sqlContext = SQLContext(sc)
 
 from delta.tables import DeltaTable
+
+username = "kevin"
+dbutils.widgets.text("username", username)
+spark.sql(f"CREATE DATABASE IF NOT EXISTS airline_delays_{username}")
+spark.sql(f"USE airline_delays_{username}")
+
+flights_loc = f"/airline_delays/{username}/DLRS/flights/"
+flights_3m_loc = f"/airline_delays/{username}/DLRS/flights_3m/"
+flights_6m_loc = f"/airline_delays/{username}/DLRS/flights_6m/"
+airports_loc = f"/airline_delays/{username}/DLRS/airports/"
+weather_loc = f"/airline_delays/{username}/DLRS/weather/"
+stations_loc = f"/airline_delays/{username}/DLRS/stations/"
+
+spark.conf.set("spark.sql.shuffle.partitions", 8)
 
 airports_processed = spark.read.table("airports_processed")
 stations_processed = spark.read.table("stations_processed")
@@ -1085,47 +1101,32 @@ display(joined_flights_stations)
 
 # COMMAND ----------
 
-(joined_flights_stations.write
- .mode("overwrite")
- .format("parquet")
- .partitionBy("DAY_OF_MONTH")
- .save(flights_loc + "processed_with_stations"))
-
-parquet_table = f"parquet.`{flights_loc}processed_with_stations`"
-partitioning_scheme = "DAY_OF_MONTH string"
-
-DeltaTable.convertToDelta(spark, parquet_table, partitioning_scheme)
+joined_flights_stations.write.mode('append').format('delta').option('mergeSchema', True).save(f'{flights_loc}processed')
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC 
-# MAGIC DROP TABLE IF EXISTS flights_processed_with_stations;
-# MAGIC 
-# MAGIC CREATE TABLE flights_processed_with_stations
-# MAGIC USING DELTA
-# MAGIC LOCATION "/airline_delays/$username/DLRS/flights/processed_with_stations"
+joined_flights_stations.write.mode('append').format('delta').save(f'{flights_loc}processed')
 
 # COMMAND ----------
 
 # MAGIC %sql
 # MAGIC SELECT *
-# MAGIC FROM flights_processed_with_stations
+# MAGIC FROM flights_processed
 # MAGIC LIMIT 1;
 
 # COMMAND ----------
 
-flights_processed_with_stations = spark.read.table("flights_processed_with_stations")
+flights_processed = spark.read.table("flights_processed")
 
 # COMMAND ----------
 
-flights_processed_with_stations.printSchema()
+flights_processed.printSchema()
 
 # COMMAND ----------
 
 # MAGIC %sql
 # MAGIC SELECT COUNT(*)
-# MAGIC FROM flights_processed_with_stations
+# MAGIC FROM flights_processed
 # MAGIC WHERE YEAR IS NULL OR MONTH IS NULL OR DAY_OF_MONTH IS NULL OR CRS_DEP_TIME IS NULL;
 
 # COMMAND ----------
@@ -1183,12 +1184,12 @@ get_datetime_string = udf(get_datetime_string)
 # COMMAND ----------
 
 # extract the hour from the departure time
-flights_processed_with_stations = flights_processed_with_stations.withColumn("CRS_DEP_TIME_HOUR", get_flight_hour("CRS_DEP_TIME"))
+flights_processed = flights_processed.withColumn("CRS_DEP_TIME_HOUR", get_flight_hour("CRS_DEP_TIME"))
 
 # COMMAND ----------
 
 #convert the flight time to UTC
-flights_processed_with_stations = flights_processed_with_stations.withColumn("FLIGHT_TIME_UTC", get_utc_datetime("YEAR",\
+flights_processed = flights_processed.withColumn("FLIGHT_TIME_UTC", get_utc_datetime("YEAR",\
                                                                                                                  "MONTH",\
                                                                                                                  "DAY_OF_MONTH",\
                                                                                                                  get_flight_hour("CRS_DEP_TIME"),\
@@ -1197,28 +1198,28 @@ flights_processed_with_stations = flights_processed_with_stations.withColumn("FL
 # COMMAND ----------
 
 # Get the weather prediction time T-2hours from departure
-flights_processed_with_stations = flights_processed_with_stations.withColumn("WEATHER_PREDICTION_TIME_UTC",
+flights_processed = flights_processed.withColumn("WEATHER_PREDICTION_TIME_UTC",
                                                                              get_two_hour_adjusted_datetime("FLIGHT_TIME_UTC"))
 
 # COMMAND ----------
 
 # Convert the datetime objects to strings
-flights_processed_with_stations = flights_processed_with_stations.withColumn("FLIGHT_TIME_UTC",
-                                                                             get_datetime_string("FLIGHT_TIME_UTC"))\
-                                                                             .withColumn("WEATHER_PREDICTION_TIME_UTC",
-                                                                             get_datetime_string("WEATHER_PREDICTION_TIME_UTC"))
+flights_processed = flights_processed.withColumn("FLIGHT_TIME_UTC",
+                                                 get_datetime_string("FLIGHT_TIME_UTC"))\
+                                                 .withColumn("WEATHER_PREDICTION_TIME_UTC",
+                                                 get_datetime_string("WEATHER_PREDICTION_TIME_UTC"))
 
 # COMMAND ----------
 
 #Finally, generate the composite keys for each station
-flights_processed_with_stations = flights_processed_with_stations.withColumn("ORIGIN_WEATHER_KEY",
-                                                                             f.concat_ws("-", "nearest_station_id_ORIGIN", "WEATHER_PREDICTION_TIME_UTC"))\
-                                                                 .withColumn("DEST_WEATHER_KEY",
-                                                                             f.concat_ws("-", "nearest_station_id_DEST", "WEATHER_PREDICTION_TIME_UTC"))
+flights_processed = flights_processed.withColumn("ORIGIN_WEATHER_KEY",
+                                                 f.concat_ws("-", "nearest_station_id_ORIGIN", "WEATHER_PREDICTION_TIME_UTC"))\
+                                     .withColumn("DEST_WEATHER_KEY",
+                                                 f.concat_ws("-", "nearest_station_id_DEST", "WEATHER_PREDICTION_TIME_UTC"))
 
 # COMMAND ----------
 
-display(flights_processed_with_stations)
+display(flights_processed)
 
 # COMMAND ----------
 
@@ -1227,26 +1228,17 @@ display(flights_processed_with_stations)
 
 # COMMAND ----------
 
-(flights_processed_with_stations.write
- .mode("overwrite")
- .format("parquet")
- .partitionBy("DAY_OF_MONTH")
- .save(flights_loc + "processed_with_weather_keys"))
+flights_processed.write.mode('append').format('delta').option('mergeSchema', True).save(f'{flights_loc}processed')
 
-parquet_table = f"parquet.`{flights_loc}processed_with_weather_keys`"
-partitioning_scheme = "DAY_OF_MONTH string"
+# COMMAND ----------
 
-DeltaTable.convertToDelta(spark, parquet_table, partitioning_scheme)
+flights_processed.write.mode('append').format('delta').save(f'{flights_loc}processed')
 
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC 
-# MAGIC DROP TABLE IF EXISTS flights_processed_with_weather_keys;
-# MAGIC 
-# MAGIC CREATE TABLE flights_processed_with_weather_keys
-# MAGIC USING DELTA
-# MAGIC LOCATION "/airline_delays/$username/DLRS/flights/processed_with_weather_keys"
+# MAGIC SELECT *
+# MAGIC FROM flights_processed
 
 # COMMAND ----------
 
