@@ -68,10 +68,14 @@
 from pyspark.sql import functions as f
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType, IntegerType, NullType, ShortType, DateType, BooleanType, BinaryType
 from pyspark.sql import SQLContext
+from math import radians, cos, sin, asin, sqrt
 import matplotlib.pyplot as plt
 import numpy as np 
 import pandas as pd
 import seaborn as sns
+from pytz import timezone 
+from datetime import  datetime, timedelta 
+
 sqlContext = SQLContext(sc)
 
 from delta.tables import DeltaTable
@@ -840,68 +844,94 @@ plt.hist(bins[:-1], bins=bins, weights=counts)
 # COMMAND ----------
 
 #create set of distinct ids from weather data
-weather_distinct_ids = weather_processed.select('STATION').distinct()
+weather_distinct_ids = weather_processed.select('WEATHER_STATION').distinct()
 
 #join distinct ids to stations tables and subset for matches
 valid_stations = weather_distinct_ids.join(stations_processed,\
-                                           weather_distinct_ids.STATION == stations_processed.STATION_USAF_WBAN,\
+                                           weather_distinct_ids.WEATHER_STATION == stations_processed.STATION_USAF_WBAN,\
                                            'left').where('STATION_USAF_WBAN IS NOT NULL')
 
 
 # COMMAND ----------
 
-joined_weather = weather_subset.join(f.broadcast(stations), weather_subset.STATION_PAD == stations.USAF_WBAN, 'left')
+display(valid_stations)
 
 # COMMAND ----------
 
-joined_weather_cache = joined_weather.cache()
+# MAGIC %md 
+# MAGIC * Query the flights to get the minimum and maximum date. 
+# MAGIC   * Per next two cells, flight data covers 1/1/2015-12/31/2019
+# MAGIC * Query the stations to look at the start and end date to verify they are all active for the reporting period we are concerned with.
 
 # COMMAND ----------
 
-display(joined_weather_cache)
+# MAGIC %sql
+# MAGIC SELECT FL_DATE, COUNT(FL_DATE) 
+# MAGIC FROM flights_processed
+# MAGIC GROUP BY FL_DATE
+# MAGIC ORDER BY FL_DATE DESC
+# MAGIC LIMIT 3;
 
 # COMMAND ----------
 
-display(joined_weather_cache.where(f.col('NAME').contains('BIG BEAR')).select(['STATION', 'LATITUDE', 'LONGITUDE', 'ELEVATION','SOURCE','NAME']).distinct())
+# MAGIC %sql
+# MAGIC SELECT FL_DATE, COUNT(FL_DATE) 
+# MAGIC FROM flights_processed
+# MAGIC GROUP BY FL_DATE
+# MAGIC ORDER BY FL_DATE ASC
+# MAGIC LIMIT 3;
 
 # COMMAND ----------
 
-# MAGIC %md **Now we will do more joins where we take the distinct weather id's and join it with the station dataset**
+# get max station end date
+display(valid_stations.select('STATION_END').sort(f.col("STATION_END").desc()).limit(3))
 
 # COMMAND ----------
 
-joined_weather_distinct_ids = weather_distinct_ids.join(f.broadcast(stations), weather_distinct_ids.STATION_PAD == stations.USAF_WBAN, 'left')
-joined_weather_distinct_ids = joined_weather_distinct_ids.where("STATION_PAD IS NOT NULL")
+# MAGIC %md 
+# MAGIC The stations table itself only has stations that show as active through March 2019, but is this reflected in the weather data?
 
 # COMMAND ----------
 
-display(joined_weather_distinct_ids)
-
-# COMMAND ----------
-
-joined_weather_joined_weather_distinct_ids.where("STATION_PAD IS NOT NULL")
-
-# COMMAND ----------
-
-no_id_match = joined_weather_cache.where('USAF_WBAN IS NULL').cache()
-
-# COMMAND ----------
-
-display(joined_weather_cache.select(["STATION_PAD", "NAME", "station_name", "usaf", "wban"]).where("usaf = 999999").distinct())
-
-# COMMAND ----------
-
-display(no_id_match.select(["STATION_PAD", "STATION", "NAME", "LATITUDE", "LONGITUDE", "SOURCE"]).distinct())
-#no_id_match.printSchema()
+# MAGIC %sql
+# MAGIC SELECT WEATHER_DATE
+# MAGIC FROM weather_processed
+# MAGIC ORDER BY WEATHER_DATE DESC
+# MAGIC LIMIT 1;
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC # Finding nearest station to each airport
+# MAGIC Weather data are collected through the end of 2019, so the ending date in the stations table is not reliable to use.
 
 # COMMAND ----------
 
-from math import radians, cos, sin, asin, sqrt
+# MAGIC %md
+# MAGIC ## Find Nearest Station to Each Airport
+# MAGIC Now that we have only the stations that are valid for our analysis, we can find the nearest one to each airport.
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC First we look at the schemas for the airports and stations
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT *
+# MAGIC FROM airports_processed
+# MAGIC LIMIT 1;
+
+# COMMAND ----------
+
+display(valid_stations.limit(1))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Define a function for the Haversine distance. This is not perfect because it does not consider the projection used when determining the latitude and longitude in the stations and airport data. However, that information is unknown, so the Haversine distance should be a reasonable approximation.
+
+# COMMAND ----------
 
 def haversine(lon1, lat1, lon2, lat2):
     """
@@ -921,22 +951,10 @@ def haversine(lon1, lat1, lon2, lat2):
 
 # COMMAND ----------
 
-#34.14694	-97.1225
-haversine(34.14694, -97.1225, 34.24694, -97.3225)
+# MAGIC %md
+# MAGIC Spark job for finding the closest stations. There is probably a better way to do this without converting stuff to RDDs, but this will work.
 
 # COMMAND ----------
-
-display(joined_weather_distinct_ids)
-
-# COMMAND ----------
-
-# for every airport
-  # create data structure to hold weather station/distance pairs
-  # for every weather station
-    # calculate haversine distance
-    # append to data structure
-    
-  # key for min(distances between airport and weather station)
 
 def find_closest_station(airports,stations):
     '''
@@ -953,11 +971,11 @@ def find_closest_station(airports,stations):
 
         for station in stations.value:
             station_list = list(station)
-            if not station_list[8] or not station_list[7]:
+            if not station_list[7] or not station_list[6]:
                 continue
-            station_lon = float(station_list[8])
-            station_lat = float(station_list[7])
-            station_id = station_list[-1]
+            station_lon = float(station_list[7])
+            station_lat = float(station_list[6])
+            station_id = station_list[1]
             yield (airport[4], (station_id, haversine(airport_lon, airport_lat, station_lon, station_lat)))
   
   
@@ -985,20 +1003,20 @@ def find_closest_station(airports,stations):
 # COMMAND ----------
 
 # build aiport and station rdds
-airports_rdd = airports.rdd
-stations_rdd = joined_weather_distinct_ids.rdd
+airports_rdd = airports_processed.rdd
+stations_rdd = valid_stations.rdd
 
 # COMMAND ----------
 
-airports.take(1)
+airports_rdd.take(1)
+
+# COMMAND ----------
+
+stations_rdd.take(1)
 
 # COMMAND ----------
 
 closest_stations = find_closest_station(airports_rdd,stations_rdd).cache()
-
-# COMMAND ----------
-
-#closest_stations.collect()
 
 # COMMAND ----------
 
@@ -1015,6 +1033,9 @@ airports_stations_origin = airports_stations_origin.withColumnRenamed("nearest_s
 airports_stations_dest = airports_stations_dest.withColumnRenamed("IATA", "IATA_DEST")
 airports_stations_dest = airports_stations_dest.withColumnRenamed("nearest_station_id", "nearest_station_id_DEST")
 airports_stations_dest = airports_stations_dest.withColumnRenamed("nearest_station_dist", "nearest_station_dist_DEST")
+
+# COMMAND ----------
+
 display(airports_stations_origin)
 
 # COMMAND ----------
@@ -1023,24 +1044,18 @@ display(airports_stations_dest)
 
 # COMMAND ----------
 
-display(airports.where(f.col('IATA').contains('\\N')))
-
-
-# COMMAND ----------
-
-display(stations.where(f.col('USAF_WBAN').contains('72054300167')))
+# MAGIC %md ## Join Nearest Stations to Flights
 
 # COMMAND ----------
 
-# MAGIC %md ## Now we will add in the nearest weather stations to each flight
+# MAGIC %sql
+# MAGIC SELECT *
+# MAGIC FROM flights_processed
+# MAGIC LIMIT 1;
 
 # COMMAND ----------
 
-display(airlines_sample)
-
-# COMMAND ----------
-
-joined_flights_stations = airlines_sample.join(f.broadcast(airports_stations_origin), airlines_sample.ORIGIN == airports_stations_origin.IATA_ORIGIN, 'left')
+joined_flights_stations = flights_processed.join(f.broadcast(airports_stations_origin), flights_processed.ORIGIN == airports_stations_origin.IATA_ORIGIN, 'left')
 joined_flights_stations = joined_flights_stations.join(f.broadcast(airports_stations_dest), joined_flights_stations.DEST == airports_stations_dest.IATA_DEST, 'left')
 
 # COMMAND ----------
@@ -1049,20 +1064,81 @@ display(joined_flights_stations)
 
 # COMMAND ----------
 
-# MAGIC %md **Prior to creating the composite keys, we need to make adjustments to our time variables**
+# MAGIC %md
+# MAGIC Now that we have our nearest weather stations for each flight, we need to create composite keys based on the time of the flight. That will require flight time adjustment to UTC because flight times are in the local time zone. To do that, we join a subset of the airport table to our joined flights and stations table.
 
 # COMMAND ----------
 
-airports_and_flights = joined_flights_stations.join(f.broadcast(airports), joined_flights_stations.ORIGIN == airports.IATA, 'left')
+#subset airports
+airports_tz = airports_processed.select(['IATA', 'AIRPORT_TZ_NAME'])
+#join flights with stations to airport_tz subset on the origin airport because only the departure time needs the UTC adjustment
+joined_flights_stations = joined_flights_stations.join(f.broadcast(airports_tz), joined_flights_stations.ORIGIN == airports_tz.IATA, 'left')
 
 # COMMAND ----------
 
-display(airports_and_flights)
+display(joined_flights_stations)
 
 # COMMAND ----------
 
-from pytz import timezone #todo move to imports
-from datetime import  datetime, timedelta #todo move this to imports section
+# MAGIC %md 
+# MAGIC Before continuing, we will land this data into our Delta Lake.
+
+# COMMAND ----------
+
+(joined_flights_stations.write
+ .mode("overwrite")
+ .format("parquet")
+ .partitionBy("DAY_OF_MONTH")
+ .save(flights_loc + "processed_with_stations"))
+
+parquet_table = f"parquet.`{flights_loc}processed_with_stations`"
+partitioning_scheme = "DAY_OF_MONTH string"
+
+DeltaTable.convertToDelta(spark, parquet_table, partitioning_scheme)
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC 
+# MAGIC DROP TABLE IF EXISTS flights_processed_with_stations;
+# MAGIC 
+# MAGIC CREATE TABLE flights_processed_with_stations
+# MAGIC USING DELTA
+# MAGIC LOCATION "/airline_delays/$username/DLRS/flights/processed_with_stations"
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT *
+# MAGIC FROM flights_processed_with_stations
+# MAGIC LIMIT 1;
+
+# COMMAND ----------
+
+flights_processed_with_stations = spark.read.table("flights_processed_with_stations")
+
+# COMMAND ----------
+
+flights_processed_with_stations.printSchema()
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT COUNT(*)
+# MAGIC FROM flights_processed_with_stations
+# MAGIC WHERE YEAR IS NULL OR MONTH IS NULL OR DAY_OF_MONTH IS NULL OR CRS_DEP_TIME IS NULL;
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Create Composite Keys in Flight Data
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Define UDFs for creating composite keys in the flights data
+
+# COMMAND ----------
 
 def get_utc_datetime(year, month, day, hour, tz):
   tz = timezone(tz)
@@ -1075,11 +1151,12 @@ def get_utc_datetime(year, month, day, hour, tz):
 
 get_utc_datetime = udf(get_utc_datetime)
 
-# In Weather: StationID_MeasurementMonth_MeasurementDay_MeasurementHour
 def get_flight_hour(flight_time):
     flight_time = str(flight_time)
     hour = ''
-    if len(flight_time) == 3:
+    if len(flight_time) in [1,2]:
+        hour = '00'
+    elif len(flight_time) == 3:
       hour = flight_time[0]
     elif len(flight_time) == 4:
       hour = flight_time[:2]
@@ -1100,41 +1177,85 @@ get_datetime_string = udf(get_datetime_string)
 
 # COMMAND ----------
 
-# MAGIC %md ## Create Composite Keys for joining weather data to flight data
+# MAGIC %md 
+# MAGIC Create composite keys on flights data
 
 # COMMAND ----------
 
-joined_flights_stations = airports_and_flights.withColumn("CRS_DEP_TIME_HOUR", get_flight_hour(airports_and_flights["CRS_DEP_TIME"]))\
-                                              .withColumn("FLIGHT_TIME_UTC",
-                                                          get_utc_datetime("YEAR",\
-                                                                           "MONTH",\
-                                                                           "DAY_OF_MONTH",\
-                                                                           get_flight_hour("CRS_DEP_TIME"),\
-                                                                           "LTz database time zone"))\
-                                              .withColumn("WEATHER_PREDICTION_TIME_UTC",
-                                                          get_two_hour_adjusted_datetime("FLIGHT_TIME_UTC"))\
-                                              .withColumn("FLIGHT_TIME_UTC",
-                                                           get_datetime_string("FLIGHT_TIME_UTC"))\
-                                              .withColumn("WEATHER_PREDICTION_TIME_UTC",
-                                                          get_datetime_string("WEATHER_PREDICTION_TIME_UTC"))\
-                                              .withColumn("ORIGIN_WEATHER_ID",
-                                                          f.concat_ws("-", "nearest_station_id_ORIGIN", "WEATHER_PREDICTION_TIME_UTC"))\
-                                              .withColumn("DEST_WEATHER_ID",
-                                                          f.concat_ws("-", "nearest_station_id_DEST", "WEATHER_PREDICTION_TIME_UTC"))
+# extract the hour from the departure time
+flights_processed_with_stations = flights_processed_with_stations.withColumn("CRS_DEP_TIME_HOUR", get_flight_hour("CRS_DEP_TIME"))
 
 # COMMAND ----------
 
-display(joined_flights_stations)
+#convert the flight time to UTC
+flights_processed_with_stations = flights_processed_with_stations.withColumn("FLIGHT_TIME_UTC", get_utc_datetime("YEAR",\
+                                                                                                                 "MONTH",\
+                                                                                                                 "DAY_OF_MONTH",\
+                                                                                                                 get_flight_hour("CRS_DEP_TIME"),\
+                                                                                                                 "AIRPORT_TZ_NAME"))
 
 # COMMAND ----------
 
-#joined_flights_stations = joined_flights_stations.withColumn("CRS_DEP_TIME_LENGTH", f.length("CRS_DEP_TIME"))
-#display(joined_flights_stations.agg(f.max("CRS_DEP_TIME_LENGTH")))
-display(joined_flights_stations.where("ORIGIN_WEATHER_ID IS NULL"))
+# Get the weather prediction time T-2hours from departure
+flights_processed_with_stations = flights_processed_with_stations.withColumn("WEATHER_PREDICTION_TIME_UTC",
+                                                                             get_two_hour_adjusted_datetime("FLIGHT_TIME_UTC"))
 
 # COMMAND ----------
 
-# MAGIC %md ## Create Composite keys for joining weather to flights
+# Convert the datetime objects to strings
+flights_processed_with_stations = flights_processed_with_stations.withColumn("FLIGHT_TIME_UTC",
+                                                                             get_datetime_string("FLIGHT_TIME_UTC"))\
+                                                                             .withColumn("WEATHER_PREDICTION_TIME_UTC",
+                                                                             get_datetime_string("WEATHER_PREDICTION_TIME_UTC"))
+
+# COMMAND ----------
+
+#Finally, generate the composite keys for each station
+flights_processed_with_stations = flights_processed_with_stations.withColumn("ORIGIN_WEATHER_KEY",
+                                                                             f.concat_ws("-", "nearest_station_id_ORIGIN", "WEATHER_PREDICTION_TIME_UTC"))\
+                                                                 .withColumn("DEST_WEATHER_KEY",
+                                                                             f.concat_ws("-", "nearest_station_id_DEST", "WEATHER_PREDICTION_TIME_UTC"))
+
+# COMMAND ----------
+
+display(flights_processed_with_stations)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Now we have composite keys to join the weather to these data. But first, lets land this in the delta lake
+
+# COMMAND ----------
+
+(flights_processed_with_stations.write
+ .mode("overwrite")
+ .format("parquet")
+ .partitionBy("DAY_OF_MONTH")
+ .save(flights_loc + "processed_with_weather_keys"))
+
+parquet_table = f"parquet.`{flights_loc}processed_with_weather_keys`"
+partitioning_scheme = "DAY_OF_MONTH string"
+
+DeltaTable.convertToDelta(spark, parquet_table, partitioning_scheme)
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC 
+# MAGIC DROP TABLE IF EXISTS flights_processed_with_weather_keys;
+# MAGIC 
+# MAGIC CREATE TABLE flights_processed_with_weather_keys
+# MAGIC USING DELTA
+# MAGIC LOCATION "/airline_delays/$username/DLRS/flights/processed_with_weather_keys"
+
+# COMMAND ----------
+
+# MAGIC %md ### Create Composite Keys in Weather Data
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC First define a UDF
 
 # COMMAND ----------
 
@@ -1282,15 +1403,12 @@ missing_recs
 
 # COMMAND ----------
 
-from pyspark.sql.functions import lit
-from pyspark.sql.functions import col,sum
-
 def count_missings(df):
     miss_counts = list()
     for c in df.columns:
-        if df.where(col(c).isNull()).count() > 0:
-           tup = (c,int(df.where(col(c).isNull()).count()))
-           miss_counts.append(tup)
+        if df.where(f.col(c).isNull()).count() > 0:
+            tup = (c,int(df.where(f.col(c).isNull()).count()))
+            miss_counts.append(tup)
     return miss_counts
 
 
@@ -1316,21 +1434,19 @@ print("\nnumerical columns with missing data:", numcolumns_miss)
 # COMMAND ----------
 
 # fill in the missing categorical values with the most frequent category 
-from pyspark.sql.functions import rank,sum,col
 
 cleaned_airlines_sample = flightsCache
 
 df_Nomiss=cleaned_airlines_sample.na.drop()
 for x in catcolums_miss:                  
-  mode=df_Nomiss.groupBy(x).count().sort(col("count").desc()).collect()
+  mode=df_Nomiss.groupBy(x).count().sort(f.col("count").desc()).collect()
   if mode:
     print(x, mode[0][0]) #print name of columns and it's most categories 
     cleaned_airlines_sample = cleaned_airlines_sample.na.fill({x:mode[0][0]})
     
 # fill the missing numerical values with the average of each #column
-from pyspark.sql.functions import mean, round
 for i in numcolumns_miss:
-  meanvalue = cleaned_airlines_sample.select(round(mean(i))).collect()
+  meanvalue = cleaned_airlines_sample.select(f.round(f.mean(i))).collect()
   if meanvalue:
     print(i, meanvalue[0][0]) 
     cleaned_airlines_sample=cleaned_airlines_sample.na.fill({i:meanvalue[0][0]})
