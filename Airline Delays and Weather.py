@@ -259,6 +259,10 @@ dbutils.fs.rm(flights_loc + "processed", recurse=True)
 
 # COMMAND ----------
 
+dbutils.fs.rm(airports_loc + "processed", recurse=True)
+
+# COMMAND ----------
+
 dbutils.fs.rm(flights_loc + "processed", recurse=True)
 dbutils.fs.rm(flights_3m_loc + "processed", recurse=True)
 dbutils.fs.rm(flights_6m_loc + "processed", recurse=True)
@@ -293,8 +297,8 @@ def process_flight_data(df):
     )
 
 flights_processed_df = process_flight_data(flights_raw_df)
-flights_3m_processed_df = process_flight_data(flights_3m_raw_df)
-flights_6m_processed_df = process_flight_data(flights_6m_raw_df)
+#flights_3m_processed_df = process_flight_data(flights_3m_raw_df)
+#flights_6m_processed_df = process_flight_data(flights_6m_raw_df)
 
 # COMMAND ----------
 
@@ -855,7 +859,46 @@ plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # MAGIC %md
 # MAGIC ## Joining Weather to Station Data
-# MAGIC Note this is for exploratory purposes. The most efficient way to do this will be to first identify the station associated with each airport, add a column for that to the flights data, and then join directly flights to weather. Note this will require a composite key because we care about both **time** and **location**. Note the cell after the initial join where the joined table is displayed with a filter will take a long time to load.
+# MAGIC The most efficient way to do this will be to first identify the station associated with each airport, add a column for that to the flights data, and then join directly flights to weather. Note this will require a composite key because we care about both **time** and **location**. Note the cell after the initial join where the joined table is displayed with a filter will take a long time to load.
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Before we join the weather and station data, it is important to make sure each airport in our flight data is represented in our airports file. 
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT DISTINCT(ORIGIN)
+# MAGIC FROM flights_processed
+# MAGIC WHERE ORIGIN NOT IN (SELECT IATA FROM airports_processed);
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC These airports were missing from the airport file. Let's add them to our silver repository. 
+# MAGIC 
+# MAGIC Tokeen, Kearney, Bullhead City and Williston
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC INSERT INTO airports_processed SELECT t.* FROM (SELECT 9999,"Tokeen Seaplane Base", "Tokeen", "United States", "TKI", "57A", "55.937222", "-133.326667", 0, -8, "A", "airport", "Internet", "America/Metlakatla" ) t;
+# MAGIC INSERT INTO airports_processed SELECT t.* FROM (SELECT 9998,"Kearney Regional Airport", "Kearney", "United States", "EAR", "KEAR", "40.7270012", "-99.0067978", 2133, -5, "A", "airport", "Internet", "America/Chicago" ) t;
+# MAGIC INSERT INTO airports_processed SELECT t.* FROM (SELECT 9997,"Laughlin Bullhead International Airport", "Bullhead City", "United States", "IFP", "KIFP", "35.1573982", "-114.5599976", 695, -7, "A", "airport", "Internet", "America/Phoenix" ) t;
+# MAGIC INSERT INTO airports_processed SELECT t.* FROM (SELECT 9996,"Williston Basin International Airport", "Williston", "United States", "XWA", "KXWA", "48.1778984", "-103.6419983", 1982, -5, "A", "airport", "Internet", "America/Chicago" ) t;
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Now that we have added the missing airports, let's check out the schema.
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT *
+# MAGIC FROM airports_processed
+# MAGIC LIMIT 1;
 
 # COMMAND ----------
 
@@ -875,7 +918,12 @@ valid_stations = weather_distinct_ids.join(stations_processed,\
 
 # COMMAND ----------
 
-display(valid_stations)
+# MAGIC %sql
+# MAGIC SELECT FL_DATE, COUNT(FL_DATE) 
+# MAGIC FROM flights_processed
+# MAGIC GROUP BY FL_DATE
+# MAGIC ORDER BY FL_DATE DESC
+# MAGIC LIMIT 3;
 
 # COMMAND ----------
 
@@ -883,15 +931,6 @@ display(valid_stations)
 # MAGIC * Query the flights to get the minimum and maximum date. 
 # MAGIC   * Per next two cells, flight data covers 1/1/2015-12/31/2019
 # MAGIC * Query the stations to look at the start and end date to verify they are all active for the reporting period we are concerned with.
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC SELECT FL_DATE, COUNT(FL_DATE) 
-# MAGIC FROM flights_processed
-# MAGIC GROUP BY FL_DATE
-# MAGIC ORDER BY FL_DATE DESC
-# MAGIC LIMIT 3;
 
 # COMMAND ----------
 
@@ -923,29 +962,17 @@ display(valid_stations.select('STATION_END').sort(f.col("STATION_END").desc()).l
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC Weather data are collected through the end of 2019, so the ending date in the stations table is not reliable to use.
+# MAGIC Weather data are collected through the end of 2019, so the ending date in the stations table is not reliable to use. Let's take a look at our valid stations.
+
+# COMMAND ----------
+
+display(valid_stations)
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## Find Nearest Station to Each Airport
 # MAGIC Now that we have only the stations that are valid for our analysis, we can find the nearest one to each airport.
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC First we look at the schemas for the airports and stations
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC SELECT *
-# MAGIC FROM airports_processed
-# MAGIC LIMIT 1;
-
-# COMMAND ----------
-
-display(valid_stations.limit(1))
 
 # COMMAND ----------
 
@@ -1139,108 +1166,6 @@ joined_flights_stations_tz = joined_flights_stations.join(airports_tz, joined_fl
 
 # COMMAND ----------
 
-joined_flights_stations_tz.count()
-
-# COMMAND ----------
-
-display(joined_flights_stations_tz.where('AIRPORT_TZ_NAME IS NULL'))
-
-# COMMAND ----------
-
-display(joined_flights_stations_tz)
-
-# COMMAND ----------
-
-
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC So the issue is missing airports, Let's query for them.
-
-# COMMAND ----------
-
-# this finds the unique airports that are missing
-origin_missing = joined_flights_stations.where('AIRPORT_TZ_NAME IS NULL').select('ORIGIN').distinct()
-dest_missing = joined_flights_stations.where('AIRPORT_TZ_NAME IS NULL').select('DEST').distinct()
-
-# COMMAND ----------
-
-display(origin_missing)
-
-# COMMAND ----------
-
-display(flights_processed.where('ORIGIN = "TKI"').limit(1))
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC **Airports not in airports data**
-# MAGIC  * TKI
-# MAGIC  * IFP
-# MAGIC  * EAR
-# MAGIC  * XWA
-# MAGIC 
-# MAGIC **Aiports found in airports data**
-# MAGIC  * PPG - American Samoa
-# MAGIC  * GUM - Guam
-# MAGIC  * SPN - Northern Mariana Islands
-# MAGIC  
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC SELECT *
-# MAGIC FROM airports_processed
-# MAGIC WHERE IATA = "XWA"
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC Add rows for each of the missing airports
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC Insert row for Tokeen
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC INSERT INTO airports_processed SELECT t.* FROM (SELECT 9999,"Tokeen Seaplane Base", "Tokeen", "United States", "TKI", "57A", "55.937222", "-133.326667", 0, -8, "A", "airport", "Internet", "America/Metlakatla" ) t;
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC Insert row for Kearney
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC INSERT INTO airports_processed SELECT t.* FROM (SELECT 9998,"Kearney Regional Airport", "Kearney", "United States", "EAR", "KEAR", "40.7270012", "-99.0067978", 2133, -5, "A", "airport", "Internet", "America/Chicago" ) t;
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC Insert Row for Bullhead City
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC INSERT INTO airports_processed SELECT t.* FROM (SELECT 9997,"Laughlin Bullhead International Airport", "Bullhead City", "United States", "IFP", "KIFP", "35.1573982", "-114.5599976", 695, -7, "A", "airport", "Internet", "America/Phoenix" ) t;
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC Insert row for Williston
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC INSERT INTO airports_processed SELECT t.* FROM (SELECT 9996,"Williston Basin International Airport", "Williston", "United States", "XWA", "KXWA", "48.1778984", "-103.6419983", 1982, -5, "A", "airport", "Internet", "America/Chicago" ) t;
-
-# COMMAND ----------
-
 # MAGIC %md 
 # MAGIC Before continuing, we will land this data into our Delta Lake.
 
@@ -1250,7 +1175,7 @@ joined_flights_stations_tz.where('AIRPORT_TZ_NAME IS NULL').count()
 
 # COMMAND ----------
 
-joined_flights_stations_tz.write.option('mergeSchema', True).mode('append').format('delta').save(f'{flights_loc}processed')
+joined_flights_stations_tz.write.option('mergeSchema', True).mode('overwrite').format('delta').save(f'{flights_loc}processed')
 
 # COMMAND ----------
 
@@ -1394,34 +1319,8 @@ flights_processed.where('AIRPORT_TZ_NAME IS NULL').count()
 
 # COMMAND ----------
 
-val = 'this is a test'
-
-# COMMAND ----------
-
-df_temp = flights_processed.withColumn('new_col', f.col('YEAR') - 10)
-
-# COMMAND ----------
-
-df_temp.count()
-
-# COMMAND ----------
-
-df_temp.write.mode('append').option('mergeSchema', True).format('delta').save(f'{flights_loc}processed')
-
-# COMMAND ----------
-
 # MAGIC %sql
 # MAGIC select * from flights_processed
-
-# COMMAND ----------
-
-flights_processed.write.mode('append').format('delta').save(f'{flights_loc}processed')
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC SELECT *
-# MAGIC FROM flights_processed
 
 # COMMAND ----------
 
