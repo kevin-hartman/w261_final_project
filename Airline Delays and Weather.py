@@ -9,6 +9,48 @@
 
 # COMMAND ----------
 
+# MAGIC %md 
+# MAGIC ### Imports
+
+# COMMAND ----------
+
+from pyspark.sql import functions as f
+from pyspark.sql.types import StructType, StructField, StringType, DoubleType, IntegerType, NullType, ShortType, DateType, BooleanType, BinaryType
+from pyspark.sql import SQLContext
+from math import radians, cos, sin, asin, sqrt
+import matplotlib.pyplot as plt
+import numpy as np 
+import pandas as pd
+import seaborn as sns
+from pytz import timezone 
+from datetime import  datetime, timedelta 
+
+sqlContext = SQLContext(sc)
+
+from delta.tables import DeltaTable
+
+# COMMAND ----------
+
+# MAGIC %md ### Configure access to staging areas - bronze & silver
+
+# COMMAND ----------
+
+username = "kevin"
+dbutils.widgets.text("username", username)
+spark.sql(f"CREATE DATABASE IF NOT EXISTS airline_delays_{username}")
+spark.sql(f"USE airline_delays_{username}")
+
+flights_loc = f"/airline_delays/{username}/DLRS/flights/"
+flights_3m_loc = f"/airline_delays/{username}/DLRS/flights_3m/"
+flights_6m_loc = f"/airline_delays/{username}/DLRS/flights_6m/"
+airports_loc = f"/airline_delays/{username}/DLRS/airports/"
+weather_loc = f"/airline_delays/{username}/DLRS/weather/"
+stations_loc = f"/airline_delays/{username}/DLRS/stations/"
+
+spark.conf.set("spark.sql.shuffle.partitions", 8)
+
+# COMMAND ----------
+
 # MAGIC %md # Table of Contents
 # MAGIC ### 1. Introduction
 # MAGIC ### 2. Data Sources
@@ -46,10 +88,6 @@
 
 # COMMAND ----------
 
-
-
-# COMMAND ----------
-
 # MAGIC %md
 # MAGIC # WARNING: DO NOT RUN CODE IN THE NEXT SECTION UNLESS YOU NEED TO RECONSTRUCT THE BRONZE AND SILVER  DATA LAKES
 # MAGIC 
@@ -59,54 +97,12 @@
 
 # COMMAND ----------
 
+
+
+# COMMAND ----------
+
 # MAGIC %md # 3. Data Lake Prep
-# MAGIC 
-# MAGIC ### Imports
-
-# COMMAND ----------
-
-from pyspark.sql import functions as f
-from pyspark.sql.types import StructType, StructField, StringType, DoubleType, IntegerType, NullType, ShortType, DateType, BooleanType, BinaryType
-from pyspark.sql import SQLContext
-from math import radians, cos, sin, asin, sqrt
-import matplotlib.pyplot as plt
-import numpy as np 
-import pandas as pd
-import seaborn as sns
-from pytz import timezone 
-from datetime import  datetime, timedelta 
-
-sqlContext = SQLContext(sc)
-
-from delta.tables import DeltaTable
-
-# COMMAND ----------
-
-# MAGIC %md ### Prep delta lakes for staging areas - bronze & silver
-
-# COMMAND ----------
-
-username = "kevin"
-dbutils.widgets.text("username", username)
-spark.sql(f"CREATE DATABASE IF NOT EXISTS airline_delays_{username}")
-spark.sql(f"USE airline_delays_{username}")
-
-flights_loc = f"/airline_delays/{username}/DLRS/flights/"
-flights_3m_loc = f"/airline_delays/{username}/DLRS/flights_3m/"
-flights_6m_loc = f"/airline_delays/{username}/DLRS/flights_6m/"
-airports_loc = f"/airline_delays/{username}/DLRS/airports/"
-weather_loc = f"/airline_delays/{username}/DLRS/weather/"
-stations_loc = f"/airline_delays/{username}/DLRS/stations/"
-
-spark.conf.set("spark.sql.shuffle.partitions", 8)
-
-# COMMAND ----------
-
-# MAGIC %md ### Download and store data locally (Bronze)
-
-# COMMAND ----------
-
-# MAGIC %md
+# MAGIC ### Download and store data locally (Bronze)
 # MAGIC #### Clear raw (bronze) landing zone
 
 # COMMAND ----------
@@ -242,16 +238,24 @@ airports_raw_df = spark.read.format("delta").load(airports_loc + "raw")
 
 # COMMAND ----------
 
-# MAGIC %md ## Perform data processing for analysis (Silver)
+flights_raw_df = spark.read.format("delta").load(flights_loc + "raw")
 
 # COMMAND ----------
 
-# MAGIC %md
+flights_raw_df.count()
+
+# COMMAND ----------
+
+airports_raw_df = spark.read.format("delta").load(airports_loc + "raw")
+
+# COMMAND ----------
+
+# MAGIC %md ## Perform data processing for analysis (Silver)
 # MAGIC #### Clear processed staging folders
 
 # COMMAND ----------
 
-dbutils.fs.rm(weather_loc + "processed", recurse=True)
+dbutils.fs.rm(flights_loc + "processed", recurse=True)
 
 # COMMAND ----------
 
@@ -261,6 +265,10 @@ dbutils.fs.rm(flights_6m_loc + "processed", recurse=True)
 dbutils.fs.rm(airports_loc + "processed", recurse=True)
 dbutils.fs.rm(weather_loc + "processed", recurse=True)
 dbutils.fs.rm(stations_loc + "processed", recurse=True)
+
+# COMMAND ----------
+
+
 
 # COMMAND ----------
 
@@ -287,6 +295,10 @@ def process_flight_data(df):
 flights_processed_df = process_flight_data(flights_raw_df)
 flights_3m_processed_df = process_flight_data(flights_3m_raw_df)
 flights_6m_processed_df = process_flight_data(flights_6m_raw_df)
+
+# COMMAND ----------
+
+flights_processed_df.count()
 
 # COMMAND ----------
 
@@ -375,30 +387,32 @@ def process_weather_data(df):
   df = (df
     .withColumn("STATION", f.lpad(df.STATION, 11, '0'))
     # WND Fields [direction angle, quality code, type code, speed rate, speed quality code]
-    .withColumn('WND_Direction_Angle', WND_col.getItem(0).cast('int')) # numerical
+    .withColumn('WND_Direction_Angle', WND_col.getItem(0).cast('int')) # continuous
     .withColumn('WND_Quality_Code', WND_col.getItem(1).cast('int')) # categorical
     .withColumn('WND_Type_Code', WND_col.getItem(2).cast('string')) # categorical
     .withColumn('WND_Speed_Rate', WND_col.getItem(3).cast('int')) # categorical
-    .withColumn('WND_Speed_Quality_Code', WND_col.getItem(4).cast('int')) # numerical
+    .withColumn('WND_Speed_Quality_Code', WND_col.getItem(4).cast('int')) # categorical
     # CIG Fields
-    .withColumn('CIG_Ceiling_Height_Dimension', CIG_col.getItem(0).cast('int')) # numerical 
+    .withColumn('CIG_Ceiling_Height_Dimension', CIG_col.getItem(0).cast('int')) # continuous 
     .withColumn('CIG_Ceiling_Quality_Code', CIG_col.getItem(1).cast('int')) # categorical
     .withColumn('CIG_Ceiling_Determination_Code', CIG_col.getItem(2).cast('string')) # categorical 
     .withColumn('CIG_CAVOK_code', CIG_col.getItem(3).cast('string')) # categorical/binary
     # VIS Fields
-    .withColumn('VIS_Distance_Dimension', VIS_col.getItem(0).cast('int')) # numerical
+    .withColumn('VIS_Distance_Dimension', VIS_col.getItem(0).cast('int')) # continuous
     .withColumn('VIS_Distance_Quality_Code', VIS_col.getItem(1).cast('int')) # categorical
     .withColumn('VIS_Variability_Code', VIS_col.getItem(2).cast('string')) # categorical/binary
     .withColumn('VIS_Quality_Variability_Code', VIS_col.getItem(3).cast('int')) # categorical
     # TMP Fields
-    .withColumn('TMP_Air_Temp', TMP_col.getItem(0).cast('int')) # numerical
+    .withColumn('TMP_Air_Temp', TMP_col.getItem(0).cast('int')) # continuous
     .withColumn('TMP_Air_Temp_Quality_Code', TMP_col.getItem(1).cast('string')) # categorical
     # DEW Fields
-    .withColumn('DEW_Point_Temp', DEW_col.getItem(0).cast('int')) # numerical
+    .withColumn('DEW_Point_Temp', DEW_col.getItem(0).cast('int')) # continuous
     .withColumn('DEW_Point_Quality_Code', DEW_col.getItem(1).cast('string')) # categorical
     # SLP Fields
-    .withColumn('SLP_Sea_Level_Pres', SLP_col.getItem(0).cast('int')) # numerical
+    .withColumn('SLP_Sea_Level_Pres', SLP_col.getItem(0).cast('int')) # continuous
     .withColumn('SLP_Sea_Level_Pres_Quality_Code', SLP_col.getItem(1).cast('int')) # categorical
+    # SNOW Fields
+    
     .withColumnRenamed("DATE", "WEATHER_DATE")
     .withColumnRenamed("SOURCE", "WEATHER_SOURCE")
     .withColumnRenamed("STATION", "WEATHER_STATION")
@@ -500,7 +514,7 @@ airports_processed_df = process_airport_data(airports_raw_df)
 
 # COMMAND ----------
 
-(airports_processed_df.write
+(airports_raw_df.write
  .mode("overwrite")
  .format("parquet")
  .partitionBy("AIRPORT_TZ_NAME")
@@ -528,19 +542,6 @@ DeltaTable.convertToDelta(spark, parquet_table, partitioning_scheme)
 # MAGIC #### Load data from processed (silver) staging area
 
 # COMMAND ----------
-
-from pyspark.sql import functions as f
-from pyspark.sql.types import StructType, StructField, StringType, DoubleType, IntegerType, NullType, ShortType, DateType, BooleanType, BinaryType
-from pyspark.sql import SQLContext
-import matplotlib.pyplot as plt
-import numpy as np 
-import pandas as pd
-import seaborn as sns
-from pytz import timezone 
-from datetime import  datetime, timedelta 
-sqlContext = SQLContext(sc)
-
-from delta.tables import DeltaTable
 
 username = "kevin"
 dbutils.widgets.text("username", username)
@@ -570,6 +571,10 @@ flights_6m_processed = spark.read.table("flights_6m_processed")
 # MAGIC ## Flights EDA
 # MAGIC 
 # MAGIC Schema for flights: https://annettegreiner.com/vizcomm/OnTime_readme.html
+
+# COMMAND ----------
+
+flights_processed = spark.read.table("flights_processed")
 
 # COMMAND ----------
 
@@ -1036,6 +1041,10 @@ closest_stations = find_closest_station(airports_rdd,stations_rdd).cache()
 
 # COMMAND ----------
 
+closest_stations.count()
+
+# COMMAND ----------
+
 airports_stations = sqlContext.createDataFrame(closest_stations)
 airports_stations = airports_stations.withColumn("nearest_station_id",f.col("_2")["_1"]).withColumn("nearest_station_dist",f.col("_2")["_2"])
 airports_stations =airports_stations.drop("_2")
@@ -1064,6 +1073,19 @@ display(airports_stations_dest)
 
 # COMMAND ----------
 
+flights_processed = spark.read.format('delta').load(f'{flights_loc}processed')
+
+# COMMAND ----------
+
+flights_processed.count()
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC DESCRIBE HISTORY flights_processed
+
+# COMMAND ----------
+
 # MAGIC %sql
 # MAGIC SELECT *
 # MAGIC FROM flights_processed
@@ -1072,11 +1094,18 @@ display(airports_stations_dest)
 # COMMAND ----------
 
 joined_flights_stations = flights_processed.join(f.broadcast(airports_stations_origin), flights_processed.ORIGIN == airports_stations_origin.IATA_ORIGIN, 'left')
+
+# COMMAND ----------
+
+joined_flights_stations.count()
+
+# COMMAND ----------
+
 joined_flights_stations = joined_flights_stations.join(f.broadcast(airports_stations_dest), joined_flights_stations.DEST == airports_stations_dest.IATA_DEST, 'left')
 
 # COMMAND ----------
 
-display(joined_flights_stations)
+joined_flights_stations.count()
 
 # COMMAND ----------
 
@@ -1085,14 +1114,130 @@ display(joined_flights_stations)
 
 # COMMAND ----------
 
-#subset airports
-airports_tz = airports_processed.select(['IATA', 'AIRPORT_TZ_NAME'])
-#join flights with stations to airport_tz subset on the origin airport because only the departure time needs the UTC adjustment
-joined_flights_stations = joined_flights_stations.join(f.broadcast(airports_tz), joined_flights_stations.ORIGIN == airports_tz.IATA, 'left')
+airports_processed.count()
 
 # COMMAND ----------
 
-display(joined_flights_stations)
+#subset airports
+airports_tz = airports_processed.select(['IATA', 'AIRPORT_TZ_NAME'])
+airports_tz.select(['IATA', 'AIRPORT_TZ_NAME']).distinct().count()
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC select AIRPORT_TZ_NAME, count(AIRPORT_TZ_NAME) AS tz_count from airports_processed group by AIRPORT_TZ_NAME
+
+# COMMAND ----------
+
+#join flights with stations to airport_tz subset on the origin airport because only the departure time needs the UTC adjustment
+joined_flights_stations_tz = joined_flights_stations.join(airports_tz, joined_flights_stations.ORIGIN == airports_tz.IATA, 'left')
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Investigate non-Joining Airports
+
+# COMMAND ----------
+
+joined_flights_stations_tz.count()
+
+# COMMAND ----------
+
+display(joined_flights_stations_tz.where('AIRPORT_TZ_NAME IS NULL'))
+
+# COMMAND ----------
+
+display(joined_flights_stations_tz)
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC So the issue is missing airports, Let's query for them.
+
+# COMMAND ----------
+
+# this finds the unique airports that are missing
+origin_missing = joined_flights_stations.where('AIRPORT_TZ_NAME IS NULL').select('ORIGIN').distinct()
+dest_missing = joined_flights_stations.where('AIRPORT_TZ_NAME IS NULL').select('DEST').distinct()
+
+# COMMAND ----------
+
+display(origin_missing)
+
+# COMMAND ----------
+
+display(flights_processed.where('ORIGIN = "TKI"').limit(1))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC **Airports not in airports data**
+# MAGIC  * TKI
+# MAGIC  * IFP
+# MAGIC  * EAR
+# MAGIC  * XWA
+# MAGIC 
+# MAGIC **Aiports found in airports data**
+# MAGIC  * PPG - American Samoa
+# MAGIC  * GUM - Guam
+# MAGIC  * SPN - Northern Mariana Islands
+# MAGIC  
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT *
+# MAGIC FROM airports_processed
+# MAGIC WHERE IATA = "XWA"
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Add rows for each of the missing airports
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Insert row for Tokeen
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC INSERT INTO airports_processed SELECT t.* FROM (SELECT 9999,"Tokeen Seaplane Base", "Tokeen", "United States", "TKI", "57A", "55.937222", "-133.326667", 0, -8, "A", "airport", "Internet", "America/Metlakatla" ) t;
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Insert row for Kearney
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC INSERT INTO airports_processed SELECT t.* FROM (SELECT 9998,"Kearney Regional Airport", "Kearney", "United States", "EAR", "KEAR", "40.7270012", "-99.0067978", 2133, -5, "A", "airport", "Internet", "America/Chicago" ) t;
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Insert Row for Bullhead City
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC INSERT INTO airports_processed SELECT t.* FROM (SELECT 9997,"Laughlin Bullhead International Airport", "Bullhead City", "United States", "IFP", "KIFP", "35.1573982", "-114.5599976", 695, -7, "A", "airport", "Internet", "America/Phoenix" ) t;
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Insert row for Williston
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC INSERT INTO airports_processed SELECT t.* FROM (SELECT 9996,"Williston Basin International Airport", "Williston", "United States", "XWA", "KXWA", "48.1778984", "-103.6419983", 1982, -5, "A", "airport", "Internet", "America/Chicago" ) t;
 
 # COMMAND ----------
 
@@ -1101,18 +1246,19 @@ display(joined_flights_stations)
 
 # COMMAND ----------
 
-joined_flights_stations.write.mode('append').format('delta').option('mergeSchema', True).save(f'{flights_loc}processed')
+joined_flights_stations_tz.where('AIRPORT_TZ_NAME IS NULL').count()
 
 # COMMAND ----------
 
-joined_flights_stations.write.mode('append').format('delta').save(f'{flights_loc}processed')
+joined_flights_stations_tz.write.option('mergeSchema', True).mode('append').format('delta').save(f'{flights_loc}processed')
 
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC SELECT *
+# MAGIC SELECT count(*)
 # MAGIC FROM flights_processed
-# MAGIC LIMIT 1;
+# MAGIC WHERE AIRPORT_TZ_NAME IS NOT NULL
+# MAGIC ;
 
 # COMMAND ----------
 
@@ -1120,7 +1266,23 @@ flights_processed = spark.read.table("flights_processed")
 
 # COMMAND ----------
 
-flights_processed.printSchema()
+flights_raw_df.count()
+
+# COMMAND ----------
+
+flights_processed.distinct().count()
+
+# COMMAND ----------
+
+joined_flights_stations.distinct().count()
+
+# COMMAND ----------
+
+display(flights_processed.select('AIRPORT_TZ_NAME').distinct())
+
+# COMMAND ----------
+
+display(joined_flights_stations.select('AIRPORT_TZ_NAME').distinct())
 
 # COMMAND ----------
 
@@ -1223,12 +1385,33 @@ display(flights_processed)
 
 # COMMAND ----------
 
+flights_processed.where('AIRPORT_TZ_NAME IS NULL').count()
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC Now we have composite keys to join the weather to these data. But first, lets land this in the delta lake
 
 # COMMAND ----------
 
-flights_processed.write.mode('append').format('delta').option('mergeSchema', True).save(f'{flights_loc}processed')
+val = 'this is a test'
+
+# COMMAND ----------
+
+df_temp = flights_processed.withColumn('new_col', f.col('YEAR') - 10)
+
+# COMMAND ----------
+
+df_temp.count()
+
+# COMMAND ----------
+
+df_temp.write.mode('append').option('mergeSchema', True).format('delta').save(f'{flights_loc}processed')
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC select * from flights_processed
 
 # COMMAND ----------
 
@@ -1477,3 +1660,107 @@ pd.DataFrame(cleaned_airlines_sample.take(5), columns=cleaned_airlines_sample.co
 
 # COMMAND ----------
 
+# MAGIC %md # Feature Engineering
+
+# COMMAND ----------
+
+def process_weather_data(df):
+  WND_col = f.split(df['WND'], ',')
+  CIG_col = f.split(df['CIG'], ',')
+  VIS_col = f.split(df['VIS'], ',')
+  TMP_col = f.split(df['TMP'], ',')
+  DEW_col = f.split(df['DEW'], ',')
+  SLP_col = f.split(df['SLP'], ',')
+  df = (df
+    .withColumn("STATION", f.lpad(df.STATION, 11, '0'))
+    # WND Fields [direction angle, quality code, type code, speed rate, speed quality code]
+    .withColumn('WND_Direction_Angle', WND_col.getItem(0).cast('int')) # continuous
+    .withColumn('WND_Quality_Code', WND_col.getItem(1).cast('int')) # categorical
+    .withColumn('WND_Type_Code', WND_col.getItem(2).cast('string')) # categorical
+    .withColumn('WND_Speed_Rate', WND_col.getItem(3).cast('int')) # continuous
+    .withColumn('WND_Speed_Quality_Code', WND_col.getItem(4).cast('int')) # categorical
+    # CIG Fields
+    .withColumn('CIG_Ceiling_Height_Dimension', CIG_col.getItem(0).cast('int')) # continuous 
+    .withColumn('CIG_Ceiling_Quality_Code', CIG_col.getItem(1).cast('int')) # categorical
+    .withColumn('CIG_Ceiling_Determination_Code', CIG_col.getItem(2).cast('string')) # categorical 
+    .withColumn('CIG_CAVOK_code', CIG_col.getItem(3).cast('string')) # categorical/binary
+    # VIS Fields
+    .withColumn('VIS_Distance_Dimension', VIS_col.getItem(0).cast('int')) # continuous
+    .withColumn('VIS_Distance_Quality_Code', VIS_col.getItem(1).cast('int')) # categorical
+    .withColumn('VIS_Variability_Code', VIS_col.getItem(2).cast('string')) # categorical/binary
+    .withColumn('VIS_Quality_Variability_Code', VIS_col.getItem(3).cast('int')) # categorical
+    # TMP Fields
+    .withColumn('TMP_Air_Temp', TMP_col.getItem(0).cast('int')) # continuous
+    .withColumn('TMP_Air_Temp_Quality_Code', TMP_col.getItem(1).cast('string')) # categorical
+    # DEW Fields
+    .withColumn('DEW_Point_Temp', DEW_col.getItem(0).cast('int')) # continuous
+    .withColumn('DEW_Point_Quality_Code', DEW_col.getItem(1).cast('string')) # categorical
+    # SLP Fields
+    .withColumn('SLP_Sea_Level_Pres', SLP_col.getItem(0).cast('int')) # continuous
+    .withColumn('SLP_Sea_Level_Pres_Quality_Code', SLP_col.getItem(1).cast('int')) # categorical
+    # SNOW Fields
+    
+    .withColumnRenamed("DATE", "WEATHER_DATE")
+    .withColumnRenamed("SOURCE", "WEATHER_SOURCE")
+    .withColumnRenamed("STATION", "WEATHER_STATION")
+       )
+
+
+  cols = set(df.columns)
+  remove_cols = set(['LATITUDE', 'LONGITUDE', 'ELEVATION', 'NAME', 'REPORT_TYPE', 'CALL_SIGN', 'WND', 'CIG','VIS','TMP', 'DEW', 'SLP'])
+  cols = list(cols - remove_cols)
+  return df.select(cols)
+  
+
+weather_processed_df = process_weather_data(weather_raw_df)
+
+# COMMAND ----------
+
+def avgWeatherData(weatherData, timePeriod):
+  columns = ['WND_Speed_Rate', 'CIG_Ceiling_Height_Dimension', 'VIS_Distance_Dimension']
+  for column in columns:
+    weatherAvgData = (weatherData
+                      .withColumn(column + '_AVG', f.col(column) / timePeriod)
+                      
+    )
+  
+  return weatherAvgData
+weatherAvgData = avgWeatherData(weather_processed_df, 3)
+
+# COMMAND ----------
+
+display(weather_raw_df)
+
+# COMMAND ----------
+
+display(weather_processed_df)
+
+# COMMAND ----------
+
+weatherAvgData = spark.sql("""select station, year(DATE) as YEAR, month(DATE) as MONTH,
+                            dayofmonth(DATE) as DAY, count(*) as TOTAL
+                            AVG(case when substr(WND, 1, 3)) == '999' then null else int(substr(WND, 1, 3)) end) as WND_ANGLE, from weather_raw_df group by station, YEAR, MONTH, DAY;""")
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT station, year(DATE) AS YEAR, month(DATE) AS MONTH, 
+# MAGIC                             dayofmonth(DATE) AS DAY, count(*) AS TOTAL, 
+# MAGIC                             AVG(CASE WHEN SUBSTR(WND, 1, 3) == '999' THEN null 
+# MAGIC                                      ELSE int(substr(WND, 1, 3)) END) AS WND_ANGLE_AVG,
+# MAGIC                             AVG(CASE WHEN SUBSTR(WND, 9, 4) == '9999' THEN null
+# MAGIC                                      ELSE int(substr(WND, 9, 4)) END) AS WND_SPEED_AVG,
+# MAGIC                             AVG(CASE WHEN SUBSTR(CIG, 1, 5) == '99999' THEN null
+# MAGIC                                      ELSE int(substr(CIG, 1, 5)) END) AS CIG_AVG,
+# MAGIC                             AVG(CASE WHEN SUBSTR(VIS, 1, 6) == '999999' THEN null
+# MAGIC                                      ELSE int(substr(VIS, 1, 6)) END) AS VIS_AVG,
+# MAGIC                             AVG(CASE WHEN SUBSTR(DEW, 1, 5) == '+9999' THEN null
+# MAGIC                                      ELSE int(substr(DEW, 1, 5)) END) AS DEW_AVG,
+# MAGIC                             AVG(CASE WHEN SUBSTR(DEW, ))
+# MAGIC                             FROM weather_raw_df GROUP BY station, YEAR, MONTH, DAY;
+
+# COMMAND ----------
+
+weather_raw_df.createOrReplaceTempView('weather_raw_df')
+# weatherAvgData.createOrReplaceTempView("weather_daily")
+# display(weather_daily)
