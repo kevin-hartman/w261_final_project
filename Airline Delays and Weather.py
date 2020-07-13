@@ -1104,12 +1104,37 @@ flights_processed = spark.read.format('delta').load(f'{flights_loc}processed')
 
 # COMMAND ----------
 
-flights_processed.count()
+# MAGIC %sql
+# MAGIC SELECT *
+# MAGIC FROM flights_processed
+# MAGIC LIMIT 1;
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC DESCRIBE HISTORY flights_processed
+joined_flights_stations = flights_processed.join(f.broadcast(airports_stations_origin), flights_processed.ORIGIN == airports_stations_origin.IATA_ORIGIN, 'left')
+joined_flights_stations = joined_flights_stations.join(f.broadcast(airports_stations_dest), joined_flights_stations.DEST == airports_stations_dest.IATA_DEST, 'left')
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Now that we have our nearest weather stations for each flight, we need to create composite keys based on the time of the flight. That will require flight time adjustment to UTC because flight times are in the local time zone. To do that, we join a subset of the airport table to our joined flights and stations table.
+
+# COMMAND ----------
+
+#subset airports
+airports_tz = airports_processed.select(['IATA', 'AIRPORT_TZ_NAME'])
+
+#join flights with stations to airport_tz subset on the origin airport because only the departure time needs the UTC adjustment
+joined_flights_stations_tz = joined_flights_stations.join(airports_tz, joined_flights_stations.ORIGIN == airports_tz.IATA, 'left')
+
+# COMMAND ----------
+
+# MAGIC %md 
+# MAGIC Before continuing, we will store this data into our Silver Delta Lake.
+
+# COMMAND ----------
+
+joined_flights_stations_tz.write.option('mergeSchema', True).mode('overwrite').format('delta').save(f'{flights_loc}processed')
 
 # COMMAND ----------
 
@@ -1120,106 +1145,12 @@ flights_processed.count()
 
 # COMMAND ----------
 
-joined_flights_stations = flights_processed.join(f.broadcast(airports_stations_origin), flights_processed.ORIGIN == airports_stations_origin.IATA_ORIGIN, 'left')
-
-# COMMAND ----------
-
-joined_flights_stations.count()
-
-# COMMAND ----------
-
-joined_flights_stations = joined_flights_stations.join(f.broadcast(airports_stations_dest), joined_flights_stations.DEST == airports_stations_dest.IATA_DEST, 'left')
-
-# COMMAND ----------
-
-joined_flights_stations.count()
-
-# COMMAND ----------
-
 # MAGIC %md
-# MAGIC Now that we have our nearest weather stations for each flight, we need to create composite keys based on the time of the flight. That will require flight time adjustment to UTC because flight times are in the local time zone. To do that, we join a subset of the airport table to our joined flights and stations table.
-
-# COMMAND ----------
-
-airports_processed.count()
-
-# COMMAND ----------
-
-#subset airports
-airports_tz = airports_processed.select(['IATA', 'AIRPORT_TZ_NAME'])
-airports_tz.select(['IATA', 'AIRPORT_TZ_NAME']).distinct().count()
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC select AIRPORT_TZ_NAME, count(AIRPORT_TZ_NAME) AS tz_count from airports_processed group by AIRPORT_TZ_NAME
-
-# COMMAND ----------
-
-#join flights with stations to airport_tz subset on the origin airport because only the departure time needs the UTC adjustment
-joined_flights_stations_tz = joined_flights_stations.join(airports_tz, joined_flights_stations.ORIGIN == airports_tz.IATA, 'left')
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Investigate non-Joining Airports
-
-# COMMAND ----------
-
-# MAGIC %md 
-# MAGIC Before continuing, we will land this data into our Delta Lake.
-
-# COMMAND ----------
-
-joined_flights_stations_tz.where('AIRPORT_TZ_NAME IS NULL').count()
-
-# COMMAND ----------
-
-joined_flights_stations_tz.write.option('mergeSchema', True).mode('overwrite').format('delta').save(f'{flights_loc}processed')
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC SELECT count(*)
-# MAGIC FROM flights_processed
-# MAGIC WHERE AIRPORT_TZ_NAME IS NOT NULL
-# MAGIC ;
+# MAGIC ### Create Composite Keys in Flight Data
 
 # COMMAND ----------
 
 flights_processed = spark.read.table("flights_processed")
-
-# COMMAND ----------
-
-flights_raw_df.count()
-
-# COMMAND ----------
-
-flights_processed.distinct().count()
-
-# COMMAND ----------
-
-joined_flights_stations.distinct().count()
-
-# COMMAND ----------
-
-display(flights_processed.select('AIRPORT_TZ_NAME').distinct())
-
-# COMMAND ----------
-
-display(joined_flights_stations.select('AIRPORT_TZ_NAME').distinct())
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC SELECT COUNT(*)
-# MAGIC FROM flights_processed
-# MAGIC WHERE YEAR IS NULL OR MONTH IS NULL OR DAY_OF_MONTH IS NULL OR CRS_DEP_TIME IS NULL;
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### Create Composite Keys in Flight Data
 
 # COMMAND ----------
 
@@ -1277,10 +1208,10 @@ flights_processed = flights_processed.withColumn("CRS_DEP_TIME_HOUR", get_flight
 
 #convert the flight time to UTC
 flights_processed = flights_processed.withColumn("FLIGHT_TIME_UTC", get_utc_datetime("YEAR",\
-                                                                                                                 "MONTH",\
-                                                                                                                 "DAY_OF_MONTH",\
-                                                                                                                 get_flight_hour("CRS_DEP_TIME"),\
-                                                                                                                 "AIRPORT_TZ_NAME"))
+                                                                                     "MONTH",\
+                                                                                     "DAY_OF_MONTH",\
+                                                                                      get_flight_hour("CRS_DEP_TIME"),\
+                                                                                      "AIRPORT_TZ_NAME"))
 
 # COMMAND ----------
 
@@ -1310,7 +1241,7 @@ display(flights_processed)
 
 # COMMAND ----------
 
-flights_processed.where('AIRPORT_TZ_NAME IS NULL').count()
+flights_processed.where('ORIGIN_WEATHER_KEY IS NULL OR DEST_WEATHER_KEY IS NULL').count()
 
 # COMMAND ----------
 
@@ -1319,8 +1250,7 @@ flights_processed.where('AIRPORT_TZ_NAME IS NULL').count()
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC select * from flights_processed
+flights_processed.write.option('mergeSchema', True).mode('overwrite').format('delta').save(f'{flights_loc}processed')
 
 # COMMAND ----------
 
@@ -1330,6 +1260,10 @@ flights_processed.where('AIRPORT_TZ_NAME IS NULL').count()
 
 # MAGIC %md
 # MAGIC First define a UDF
+
+# COMMAND ----------
+
+weather_processed = spark.read.table("weather_processed")
 
 # COMMAND ----------
 
@@ -1343,19 +1277,41 @@ def create_composite_weather_key(d, k):
     the_id = "-".join([k,id_datetime_portion])
     return the_id
 create_composite_weather_key = udf(create_composite_weather_key)
+spark.udf.register("create_composite_weather_key", create_composite_weather_key)
 
 # COMMAND ----------
 
-weather_subset = weather_subset.where("STATION IS NOT NULL").withColumn("WEATHER_KEY",create_composite_weather_key("DATE","STATION_PAD"))
+# MAGIC %md
+# MAGIC Remove weather data with no station ID and land in Delta Lake
 
 # COMMAND ----------
 
-display(weather_subset)
-#STATION_PAD is the weather station ID
+weather_processed.where("WEATHER_STATION IS NOT NULL").write.option('mergeSchema', True).mode('overwrite').format('delta').save(f'{weather_loc}processed')
 
 # COMMAND ----------
 
-display(weather.where("STATION IS NULL"))
+# MAGIC %sql
+# MAGIC SELECT *
+# MAGIC FROM weather_processed
+# MAGIC WHERE create_composite_weather_key(WEATHER_DATE, WEATHER_STATION) IS NULL;
+
+# COMMAND ----------
+
+weather_processed = spark.sql("SELECT *, create_composite_weather_key(WEATHER_DATE, WEATHER_STATION) AS WEATHER_KEY FROM weather_processed;")
+
+# COMMAND ----------
+
+display(weather_processed)
+
+# COMMAND ----------
+
+weather_processed.write.option('mergeSchema', True).mode('overwrite').format('delta').save(f'{weather_loc}processed')
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT *
+# MAGIC FROM weather_processed
 
 # COMMAND ----------
 
