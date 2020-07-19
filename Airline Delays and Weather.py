@@ -24,6 +24,7 @@ import pandas as pd
 import seaborn as sns
 from pytz import timezone 
 from datetime import  datetime, timedelta 
+import os
 
 sqlContext = SQLContext(sc)
 
@@ -97,10 +98,6 @@ spark.conf.set("spark.sql.shuffle.partitions", 8)
 
 # COMMAND ----------
 
-
-
-# COMMAND ----------
-
 # MAGIC %md # 3. Data Lake Prep
 # MAGIC ### Download and store data locally (Bronze)
 # MAGIC #### Clear raw (bronze) landing zone
@@ -147,7 +144,6 @@ airports_source_url = "https://raw.githubusercontent.com/jpatokal/openflights/ma
 # COMMAND ----------
 
 # MAGIC %python
-# MAGIC import os
 # MAGIC os.environ['airports_source_url'] = airports_source_url
 
 # COMMAND ----------
@@ -259,7 +255,7 @@ dbutils.fs.rm(flights_loc + "processed", recurse=True)
 
 # COMMAND ----------
 
-dbutils.fs.rm(airports_loc + "processed", recurse=True)
+dbutils.fs.rm(weather_loc + "processed", recurse=True)
 
 # COMMAND ----------
 
@@ -269,10 +265,6 @@ dbutils.fs.rm(flights_6m_loc + "processed", recurse=True)
 dbutils.fs.rm(airports_loc + "processed", recurse=True)
 dbutils.fs.rm(weather_loc + "processed", recurse=True)
 dbutils.fs.rm(stations_loc + "processed", recurse=True)
-
-# COMMAND ----------
-
-
 
 # COMMAND ----------
 
@@ -391,30 +383,30 @@ def process_weather_data(df):
   df = (df
     .withColumn("STATION", f.lpad(df.STATION, 11, '0'))
     # WND Fields [direction angle, quality code, type code, speed rate, speed quality code]
-    .withColumn('WND_Direction_Angle', WND_col.getItem(0).cast('int')) # continuous
-    .withColumn('WND_Quality_Code', WND_col.getItem(1).cast('int')) # categorical
-    .withColumn('WND_Type_Code', WND_col.getItem(2).cast('string')) # categorical
-    .withColumn('WND_Speed_Rate', WND_col.getItem(3).cast('int')) # categorical
-    .withColumn('WND_Speed_Quality_Code', WND_col.getItem(4).cast('int')) # categorical
+    .withColumn('WND_DIRECTION_ANGLE', WND_col.getItem(0).cast('int')) # continuous
+    .withColumn('WND_QUALITY_CODE', WND_col.getItem(1).cast('int')) # categorical
+    .withColumn('WND_TYPE_CODE', WND_col.getItem(2).cast('string')) # categorical
+    .withColumn('WND_SPEED_RATE', WND_col.getItem(3).cast('int')) # categorical
+    .withColumn('WND_SPEED_QUALITY_CODE', WND_col.getItem(4).cast('int')) # categorical
     # CIG Fields
-    .withColumn('CIG_Ceiling_Height_Dimension', CIG_col.getItem(0).cast('int')) # continuous 
-    .withColumn('CIG_Ceiling_Quality_Code', CIG_col.getItem(1).cast('int')) # categorical
-    .withColumn('CIG_Ceiling_Determination_Code', CIG_col.getItem(2).cast('string')) # categorical 
-    .withColumn('CIG_CAVOK_code', CIG_col.getItem(3).cast('string')) # categorical/binary
+    .withColumn('CIG_CEILING_HEIGHT_DIMENSION', CIG_col.getItem(0).cast('int')) # continuous 
+    .withColumn('CIG_CEILING_QUALITY_CODE', CIG_col.getItem(1).cast('int')) # categorical
+    .withColumn('CIG_CEILING_DETERMINATION_CODE', CIG_col.getItem(2).cast('string')) # categorical 
+    .withColumn('CIG_CAVOK_CODE', CIG_col.getItem(3).cast('string')) # categorical/binary
     # VIS Fields
-    .withColumn('VIS_Distance_Dimension', VIS_col.getItem(0).cast('int')) # continuous
-    .withColumn('VIS_Distance_Quality_Code', VIS_col.getItem(1).cast('int')) # categorical
-    .withColumn('VIS_Variability_Code', VIS_col.getItem(2).cast('string')) # categorical/binary
-    .withColumn('VIS_Quality_Variability_Code', VIS_col.getItem(3).cast('int')) # categorical
+    .withColumn('VIS_DISTANCE_DIMENSION', VIS_col.getItem(0).cast('int')) # continuous
+    .withColumn('VIS_DISTANCE_QUALITY_CODE', VIS_col.getItem(1).cast('int')) # categorical
+    .withColumn('VIS_VARIABILITY_CODE', VIS_col.getItem(2).cast('string')) # categorical/binary
+    .withColumn('VIS_QUALITY_VARIABILITY_CODE', VIS_col.getItem(3).cast('int')) # categorical
     # TMP Fields
-    .withColumn('TMP_Air_Temp', TMP_col.getItem(0).cast('int')) # continuous
-    .withColumn('TMP_Air_Temp_Quality_Code', TMP_col.getItem(1).cast('string')) # categorical
+    .withColumn('TMP_AIR_TEMP', TMP_col.getItem(0).cast('int')) # continuous
+    .withColumn('TMP_AIR_TEMP_QUALITY_CODE', TMP_col.getItem(1).cast('string')) # categorical
     # DEW Fields
-    .withColumn('DEW_Point_Temp', DEW_col.getItem(0).cast('int')) # continuous
-    .withColumn('DEW_Point_Quality_Code', DEW_col.getItem(1).cast('string')) # categorical
+    .withColumn('DEW_POINT_TEMP', DEW_col.getItem(0).cast('int')) # continuous
+    .withColumn('DEW_POINT_QUALITY_CODE', DEW_col.getItem(1).cast('string')) # categorical
     # SLP Fields
-    .withColumn('SLP_Sea_Level_Pres', SLP_col.getItem(0).cast('int')) # continuous
-    .withColumn('SLP_Sea_Level_Pres_Quality_Code', SLP_col.getItem(1).cast('int')) # categorical
+    .withColumn('SLP_SEA_LEVEL_PRES', SLP_col.getItem(0).cast('int')) # continuous
+    .withColumn('SLP_SEA_LEVEL_PRES_QUALITY_CODE', SLP_col.getItem(1).cast('int')) # categorical
     # SNOW Fields
     
     .withColumnRenamed("DATE", "WEATHER_DATE")
@@ -426,7 +418,10 @@ def process_weather_data(df):
   cols = set(df.columns)
   remove_cols = set(['LATITUDE', 'LONGITUDE', 'ELEVATION', 'NAME', 'REPORT_TYPE', 'CALL_SIGN', 'WND', 'CIG','VIS','TMP', 'DEW', 'SLP'])
   cols = list(cols - remove_cols)
-  return df.select(cols)
+  df = df.select(cols)
+  for col in df.columns:
+    df = df.withColumnRenamed(col,f'WEATHER1_{col}')
+  return df
   
 
 weather_processed_df = process_weather_data(weather_raw_df)
@@ -436,11 +431,11 @@ weather_processed_df = process_weather_data(weather_raw_df)
 (weather_processed_df.write
  .mode("overwrite")
  .format("parquet")
- .partitionBy("WND_Direction_Angle")
+ .partitionBy("WEATHER1_WND_DIRECTION_ANGLE")
  .save(weather_loc + "processed"))
 
 parquet_table = f"parquet.`{weather_loc}processed`"
-partitioning_scheme = "WND_Direction_Angle string"
+partitioning_scheme = "WEATHER1_WND_DIRECTION_ANGLE string"
 
 DeltaTable.convertToDelta(spark, parquet_table, partitioning_scheme)
 
@@ -623,7 +618,7 @@ get_dtype(flights_sample, 'ORIGIN')
 # most features are categorical
 class Analyze:
     def __init__(self, df):
-        self.df = df.toPandas()
+        self.df = df
     
     def remove_df():
         self.df = None
@@ -633,7 +628,7 @@ class Analyze:
         #sns.set(rc={'figure.figsize':(10*2,16*8)})
         sns.set()
         i=0
-        fig, ax = plt.subplots(nrows=round(len(self.df.columns)), ncols=2, figsize=(16,5*round(len(self.df.columns))))
+        fig, ax = plt.subplots(nrows=round(len(self.df.columns)), ncols=2, figsize=(16,3*round(len(self.df.columns))))
         all_cols=[]
         for col in self.df.columns:
             if self.df[col].dtype.name == 'object'  or self.df[col].dtype.name == 'category': 
@@ -765,13 +760,6 @@ plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
 
-# MAGIC %md # TODO
-# MAGIC > Visualize the locations of the airport and the amount of traffic that is coming using a US map  
-# MAGIC https://www.transtats.bts.gov/DL_SelectFields.asp?Table_ID=236&DB_Short_Name=On-Time
-# MAGIC > Scatterplot comparing the distance between the airports and the in flight air delay. 
-
-# COMMAND ----------
-
 # MAGIC %md ### Next, we will look into visualizing arrival delay.  However, we should note that arrival delay also encompasses any delay from the departure delay.  Therefore, we must first ensure that we create a new column that accounts for this discrepancy.
 
 # COMMAND ----------
@@ -844,19 +832,6 @@ plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
 
-# MAGIC %md ### Now let's take a look at how much of this data is missing
-
-# COMMAND ----------
-
-# TMP_Air_Tempbins, counts = weather_subset.where('WND_Categorical_Variables' <= 113').select('WND_Speed_Rate').rdd.flatMap(lambda x: x).histogram(20)
-# plt.hist(bins[:-1], bins=bins, weights=counts)
-
-# COMMAND ----------
-
-
-
-# COMMAND ----------
-
 # MAGIC %md
 # MAGIC ## Joining Weather to Station Data
 # MAGIC The most efficient way to do this will be to first identify the station associated with each airport, add a column for that to the flights data, and then join directly flights to weather. Note this will require a composite key because we care about both **time** and **location**. Note the cell after the initial join where the joined table is displayed with a filter will take a long time to load.
@@ -904,6 +879,10 @@ plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # MAGIC %md ### Get Distinct Stations From Weather Data
 # MAGIC This ensures that we only use stations that are valid for our analysis period.
+
+# COMMAND ----------
+
+weather_processed = spark.read.table("weather_processed")
 
 # COMMAND ----------
 
@@ -1056,35 +1035,44 @@ stations_rdd = valid_stations.rdd
 
 # COMMAND ----------
 
-airports_rdd.take(1)
-
-# COMMAND ----------
-
-stations_rdd.take(1)
-
-# COMMAND ----------
-
 closest_stations = find_closest_station(airports_rdd,stations_rdd).cache()
 
 # COMMAND ----------
 
-closest_stations.count()
+# MAGIC %md
+# MAGIC ### Need to look at Honolulu
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT *
+# MAGIC FROM stations_processed
+# MAGIC WHERE STATION_STATE = "HI"
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT WEATHER_STATION, COUNT(*) AS NUM_RECORDS
+# MAGIC FROM weather_processed
+# MAGIC WHERE WEATHER_STATION IN (SELECT STATION_USAF_WBAN FROM stations_processed WHERE STATION_STATE = "HI")
+# MAGIC GROUP BY WEATHER_STATION
+# MAGIC ORDER BY NUM_RECORDS DESC
 
 # COMMAND ----------
 
 airports_stations = sqlContext.createDataFrame(closest_stations)
-airports_stations = airports_stations.withColumn("nearest_station_id",f.col("_2")["_1"]).withColumn("nearest_station_dist",f.col("_2")["_2"])
+airports_stations = airports_stations.withColumn("NEAREST_STATION_ID",f.col("_2")["_1"]).withColumn("NEAREST_STATION_DIST",f.col("_2")["_2"])
 airports_stations =airports_stations.drop("_2")
 airports_stations_origin = airports_stations.withColumnRenamed("_1", "IATA")
 airports_stations_dest = airports_stations_origin
 
 airports_stations_origin = airports_stations_origin.withColumnRenamed("IATA", "IATA_ORIGIN")
-airports_stations_origin = airports_stations_origin.withColumnRenamed("nearest_station_id", "nearest_station_id_ORIGIN")
-airports_stations_origin = airports_stations_origin.withColumnRenamed("nearest_station_dist", "nearest_station_dist_ORIGIN")
+airports_stations_origin = airports_stations_origin.withColumnRenamed("NEAREST_STATION_ID", "NEAREST_STATION_ID_ORIGIN")
+airports_stations_origin = airports_stations_origin.withColumnRenamed("NEAREST_STATION_DIST", "NEAREST_STATION_DISTt_ORIGIN")
 
 airports_stations_dest = airports_stations_dest.withColumnRenamed("IATA", "IATA_DEST")
-airports_stations_dest = airports_stations_dest.withColumnRenamed("nearest_station_id", "nearest_station_id_DEST")
-airports_stations_dest = airports_stations_dest.withColumnRenamed("nearest_station_dist", "nearest_station_dist_DEST")
+airports_stations_dest = airports_stations_dest.withColumnRenamed("NEAREST_STATION_ID", "NEAREST_STATION_ID_DEST")
+airports_stations_dest = airports_stations_dest.withColumnRenamed("NEAREST_STATION_DIST", "NEAREST_STATION_DIST_DEST")
 
 # COMMAND ----------
 
@@ -1254,6 +1242,58 @@ flights_processed.write.option('mergeSchema', True).mode('overwrite').format('de
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC Honolulu is missing a lot of weather data so we will replace its weather key with that of Hilo
+# MAGIC Station ID 99999921515
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT * FROM flights_processed
+# MAGIC WHERE ORIGIN = "HNL"
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT * FROM flights_processed
+# MAGIC WHERE DEST = "HNL"
+
+# COMMAND ----------
+
+#create udfs for fixing the HNL nearest stations and weather keys
+def replace_HNL_weather_station_id(id):
+    return "99999921515"
+def fix_HNL_weather_key(weather_key):
+    station, time = weather_key.split('-')
+    new_weather_key = f'99999921515-{time}'
+    return new_weather_key
+  
+# register UDFs
+spark.udf.register("replace_HNL_weather_station_id", replace_HNL_weather_station_id)
+spark.udf.register("fix_HNL_weather_key", fix_HNL_weather_key)
+
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC UPDATE flights_processed
+# MAGIC SET nearest_station_id_ORIGIN = replace_HNL_weather_station_id(nearest_station_id_ORIGIN), ORIGIN_WEATHER_KEY = fix_HNL_weather_key(ORIGIN_WEATHER_KEY)
+# MAGIC WHERE ORIGIN = "HNL"
+
+# COMMAND ----------
+
+flights_processed = spark.read.table("flights_processed")
+
+# COMMAND ----------
+
+display(flights_processed)
+
+# COMMAND ----------
+
+flights_processed.write.option('mergeSchema', True).mode('overwrite').format('delta').save(f'{flights_loc}processed')
+
+# COMMAND ----------
+
 # MAGIC %md ### Create Composite Keys in Weather Data
 
 # COMMAND ----------
@@ -1267,6 +1307,12 @@ weather_processed = spark.read.table("weather_processed")
 
 # COMMAND ----------
 
+# MAGIC %sql 
+# MAGIC SELECT * FROM weather_processed
+# MAGIC LIMIT 1
+
+# COMMAND ----------
+
 def create_composite_weather_key(d, k):
     datestr = d.strftime("%Y-%m-%dT%H:%M:%S.%f%z")
     date, time = datestr.split("T")
@@ -1276,7 +1322,7 @@ def create_composite_weather_key(d, k):
     id_datetime_portion = id_date_portion+id_hour_portion
     the_id = "-".join([k,id_datetime_portion])
     return the_id
-create_composite_weather_key = udf(create_composite_weather_key)
+#create_composite_weather_key = udf(create_composite_weather_key)
 spark.udf.register("create_composite_weather_key", create_composite_weather_key)
 
 # COMMAND ----------
@@ -1286,22 +1332,28 @@ spark.udf.register("create_composite_weather_key", create_composite_weather_key)
 
 # COMMAND ----------
 
-weather_processed.where("WEATHER_STATION IS NOT NULL").write.option('mergeSchema', True).mode('overwrite').format('delta').save(f'{weather_loc}processed')
+weather_processed.where("WEATHER1_WEATHER_STATION IS NOT NULL").write.option('mergeSchema', True).mode('overwrite').format('delta').save(f'{weather_loc}processed')
 
 # COMMAND ----------
 
 # MAGIC %sql
 # MAGIC SELECT *
 # MAGIC FROM weather_processed
-# MAGIC WHERE create_composite_weather_key(WEATHER_DATE, WEATHER_STATION) IS NULL;
+# MAGIC WHERE create_composite_weather_key(WEATHER1_WEATHER_DATE, WEATHER1_WEATHER_STATION) IS NULL;
 
 # COMMAND ----------
 
-weather_processed = spark.sql("SELECT *, create_composite_weather_key(WEATHER_DATE, WEATHER_STATION) AS WEATHER_KEY FROM weather_processed;")
+weather_processed = spark.sql("SELECT *, create_composite_weather_key(WEATHER1_WEATHER_DATE, WEATHER1_WEATHER_STATION) AS WEATHER1_WEATHER_KEY FROM weather_processed;")
 
 # COMMAND ----------
 
-display(weather_processed)
+# MAGIC %sql
+# MAGIC SELECT * FROM weather_processed
+# MAGIC LIMIT 1
+
+# COMMAND ----------
+
+display(weather_processed.limit(1))
 
 # COMMAND ----------
 
@@ -1312,6 +1364,7 @@ weather_processed.write.option('mergeSchema', True).mode('overwrite').format('de
 # MAGIC %sql
 # MAGIC SELECT *
 # MAGIC FROM weather_processed
+# MAGIC LIMIT 1
 
 # COMMAND ----------
 
@@ -1319,85 +1372,141 @@ weather_processed.write.option('mergeSchema', True).mode('overwrite').format('de
 
 # COMMAND ----------
 
-combined_raw_features = joined_flights_stations.join(weather_subset, joined_flights_stations.ORIGIN_WEATHER_ID == weather_subset.WEATHER_KEY, "left")
+weather_processed = spark.read.table("weather_processed")
 
 # COMMAND ----------
 
-display(combined_raw_features)
+display(flights_processed)
 
 # COMMAND ----------
 
-combined_raw_features.printSchema()
+# MAGIC %sql
+# MAGIC SELECT * 
+# MAGIC FROM flights_processed
+# MAGIC LEFT JOIN weather_processed
+# MAGIC ON flights_processed.ORIGIN_WEATHER_KEY=weather_processed.WEATHER_KEY
+# MAGIC LIMIT 10;
 
 # COMMAND ----------
 
-combined_raw_features_2 = combined_raw_features.join(weather_subset, combined_raw_features.DEST_WEATHER_ID == weather_subset.WEATHER_KEY, "left")
+# join the origin weather
+flights_processed = spark.sql("SELECT * FROM flights_processed LEFT JOIN weather_processed ON flights_processed.ORIGIN_WEATHER_KEY=weather_processed.WEATHER1_WEATHER_KEY;")
 
 # COMMAND ----------
 
-combined_raw_features.write.parquet("dbfs:/staging/combined_raw_features.parquet")
+# save results of first join to Delta Lake
+flights_processed.write.option('mergeSchema', True).mode('overwrite').format('delta').save(f'{flights_loc}processed')
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT COUNT(*)
+# MAGIC FROM flights_processed
+# MAGIC WHERE WEATHER_KEY IS NULL
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC # Split the train/validation/test sets and normalize the data
+# MAGIC Before doing the second join we need to create a copy of the weather data with the columns renamed.
 
 # COMMAND ----------
 
-# data distribution across RDD partitions is not idempotent, and could be rearranged or updated during the query execution, thus affecting the output of the randomSplit method
-# to resolve the issue, we can repartition, or apply an aggregate function, or we can cache (https://kb.databricks.com/data/random-split-behavior.html)
-# also add a unique ID (monotonically_increasing_id)
-flightsCache = airlines_sample.withColumn("id", f.monotonically_increasing_id()).cache()
+weather_cols = weather_processed.columns
+for col in weather_cols:
+  weather_processed = weather_processed.withColumnRenamed(col,f'WEATHER2_{col}')
 
 # COMMAND ----------
 
-flightsCache = flightsCache.na.drop(subset=["DEP_DEL15"])
+weather_processed.printSchema()
 
 # COMMAND ----------
 
-# function to create stratified train, test and validate sets from supplied ratios 
-def generate_train_test_validate_sets(train_ratio, test_ratio, df, label, join_on, seed):
-    reserved_size = 1-train_ratio
-    
-    fractions = df.select(label).distinct().withColumn("fraction", f.lit(train_ratio)).rdd.collectAsMap()
-    df_train = df.stat.sampleBy(label, fractions, seed)
-    df_remaining = df.join(df_train, on=join_on, how="left_anti")
-    
-    reserved_size = 1 - (test_ratio / reserved_size)
-
-    fractions = df_remaining.select(label).distinct().withColumn("fraction", f.lit(reserved_size)).rdd.collectAsMap()
-    df_test = df_remaining.stat.sampleBy(label, fractions, seed)
-    df_validate = df_remaining.join(df_test, on=join_on, how="left_anti")
-   
-    return df_train, df_test, df_validate
-
+#save the duplicated weather data in Delta Lake
+weather_processed.write.option('mergeSchema', True).mode('overwrite').format('delta').save(f'{weather_loc}processed_2')
 
 # COMMAND ----------
 
-df_train, df_test, df_validate = generate_train_test_validate_sets(train_ratio=.8, test_ratio=.1, df=flightsCache, label='DEP_DEL15', join_on="id", seed=42)
+# MAGIC %sql
+# MAGIC 
+# MAGIC DROP TABLE IF EXISTS weather_processed_2;
+# MAGIC 
+# MAGIC CREATE TABLE weather_processed_2
+# MAGIC USING DELTA
+# MAGIC LOCATION "/airline_delays/$username/DLRS/weather/processed_2"
 
 # COMMAND ----------
 
-print(df_train.count())
+# MAGIC %sql
+# MAGIC SELECT * FROM weather_processed_2
+# MAGIC LIMIT 10
 
 # COMMAND ----------
 
-print(df_test.count())
+# second join
+# join the origin weather
+flights_processed = spark.sql("SELECT * FROM flights_processed LEFT JOIN weather_processed_2 ON flights_processed.DEST_WEATHER_KEY=weather_processed_2.WEATHER2_WEATHER_KEY;")
 
 # COMMAND ----------
 
-print(df_validate.count())
+flights_processed.write.option('mergeSchema', True).mode('overwrite').format('delta').save(f'{flights_loc}processed')
 
 # COMMAND ----------
 
-print(flightsCache.count())
+# MAGIC %sql
+# MAGIC SELECT ORIGIN, count(*) AS CNT FROM flights_processed
+# MAGIC WHERE WEATHER_KEY IS NULL
+# MAGIC GROUP BY ORIGIN
+# MAGIC ORDER BY CNT DESC
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT DEST, count(*) AS CNT FROM flights_processed
+# MAGIC WHERE WEATHER2_WEATHER_KEY IS NULL
+# MAGIC GROUP BY DEST
+# MAGIC ORDER BY CNT DESC
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT a.ORIGIN, ((CASE WHEN b.CNT_MISSING IS NOT NULL THEN b.CNT_MISSING
+# MAGIC                         ELSE 0 END)/a.TOTAL) AS PROP_MISSING, a.TOTAL, b.CNT_MISSING
+# MAGIC FROM (SELECT ORIGIN, COUNT(*) AS TOTAL 
+# MAGIC       FROM flights_processed
+# MAGIC       GROUP BY ORIGIN) a
+# MAGIC JOIN (SELECT ORIGIN, count(*) AS CNT_MISSING
+# MAGIC       FROM flights_processed
+# MAGIC       WHERE WEATHER_KEY IS NULL
+# MAGIC       GROUP BY ORIGIN) b
+# MAGIC ON a.ORIGIN=b.ORIGIN
+# MAGIC ORDER BY PROP_MISSING DESC;
+
+# COMMAND ----------
+
+# MAGIC %sql
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC # Working Section
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC # Remaining analysis on fully joined data table
+
+# COMMAND ----------
+
+#flights_train = spark.sql("SELECT * FROM flights_processed WHERE YEAR IN (2015, 2016, 2017);")
+#flights_validate = spark.sql("SELECT * FROM flights_processed WHERE YEAR = 2018;")
+#flights_test = spark.sql("SELECT * FROM flights_processed WHERE YEAR = 2019;")
 
 # COMMAND ----------
 
 # review categorical and numerical features:
-cat_cols = [item[0] for item in df_train.dtypes if item[1].startswith('string')] 
+cat_cols = [item[0] for item in flights_processed.dtypes if item[1].startswith('string')] 
 print(str(len(cat_cols)) + '  categorical features')
-num_cols = [item[0] for item in df_train.dtypes if item[1].startswith('int') | item[1].startswith('double')][1:]
+num_cols = [item[0] for item in flights_processed.dtypes if item[1].startswith('int') | item[1].startswith('double')][1:]
 print(str(len(num_cols)) + '  numerical features')
 
 # COMMAND ----------
@@ -1424,8 +1533,490 @@ def info_missing_table(df_pd):
 
 # COMMAND ----------
 
-missing_recs = info_missing_table(flightsCache.toPandas())
-missing_recs
+sample_df = spark.sql("SELECT * FROM flights_processed WHERE YEAR IN (2015, 2016, 2017)").sample(False, 0.01)
+
+# COMMAND ----------
+
+sample_panda_df = sample_df.toPandas()
+
+# COMMAND ----------
+
+sample_recs = info_missing_table(sample_panda_df)
+sample_recs
+
+# COMMAND ----------
+
+colToDrop = sample_recs[sample_recs['% of Total Values'] > 95].index.values
+colToDrop
+
+# COMMAND ----------
+
+colToDrop = ['DIV4_LONGEST_GTIME', 'DIV4_TOTAL_GTIME', 'DIV3_WHEELS_ON',
+       'DIV3_TOTAL_GTIME', 'DIV3_LONGEST_GTIME', 'DIV3_WHEELS_OFF',
+       'DIV3_TAIL_NUM', 'DIV4_AIRPORT', 'DIV4_AIRPORT_ID',
+       'DIV4_AIRPORT_SEQ_ID', 'DIV4_WHEELS_ON', 'DIV4_WHEELS_OFF',
+       'DIV3_AIRPORT', 'DIV4_TAIL_NUM', 'DIV5_AIRPORT', 'DIV5_AIRPORT_ID',
+       'DIV5_AIRPORT_SEQ_ID', 'DIV5_WHEELS_ON', 'DIV5_TOTAL_GTIME',
+       'DIV5_LONGEST_GTIME', 'DIV5_WHEELS_OFF', 'DIV5_TAIL_NUM',
+       'DIV3_AIRPORT_SEQ_ID', 'DIV3_AIRPORT_ID', 'DIV2_WHEELS_OFF',
+       'DIV2_TAIL_NUM', 'DIV2_AIRPORT_ID', 'DIV2_TOTAL_GTIME',
+       'DIV2_WHEELS_ON', 'DIV2_AIRPORT_SEQ_ID', 'DIV2_AIRPORT',
+       'DIV2_LONGEST_GTIME', 'DIV_ARR_DELAY', 'DIV_ACTUAL_ELAPSED_TIME',
+       'DIV1_WHEELS_OFF', 'DIV1_TAIL_NUM', 'DIV_DISTANCE',
+       'DIV_REACHED_DEST', 'DIV1_AIRPORT_ID', 'DIV1_AIRPORT_SEQ_ID',
+       'DIV1_AIRPORT', 'DIV1_TOTAL_GTIME', 'DIV1_LONGEST_GTIME',
+       'DIV1_WHEELS_ON', 'TOTAL_ADD_GTIME', 'FIRST_DEP_TIME',
+       'LONGEST_ADD_GTIME', 'CANCELLATION_CODE']
+
+# COMMAND ----------
+
+colToKeep = sample_recs[sample_recs['% of Total Values'] < 95].index.values
+colToKeep
+
+# COMMAND ----------
+
+colToKeep = ['ACTUAL_ELAPSED_TIME',
+ 'AIR_TIME',
+ 'ARR_DEL15',
+ 'ARR_DELAY',
+ 'ARR_DELAY_GROUP',
+ 'ARR_DELAY_NEW',
+ 'ARR_TIME',
+ 'CARRIER_DELAY',
+ 'CRS_ELAPSED_TIME',
+ 'DEP_DEL15',
+ 'DEP_DELAY',
+ 'DEP_DELAY_GROUP',
+ 'DEP_DELAY_NEW',
+ 'DEP_TIME',
+ 'IN_FLIGHT_AIR_DELAY',
+ 'LATE_AIRCRAFT_DELAY',
+ 'NAS_DELAY',
+ 'SECURITY_DELAY',
+ 'TAIL_NUM',
+ 'TAXI_IN',
+ 'TAXI_OUT',
+ 'WEATHER_DELAY',
+ 'WHEELS_OFF',
+ 'WHEELS_ON']
+
+# COMMAND ----------
+
+weather1ColToKeep = ['GN1', 'GF1', 'UA1', 'AU2',
+       'AX5', 'TMP_Air_Temp', 'MK1',
+       'CN3', 'GM1', 'GA2',
+       'SLP_Sea_Level_Pres_Quality_Code', 'AW7',
+       'MG1', 'CG3', 'VIS_Variability_Code',
+       'GO1', 'AL3', 'AI1', 'MF1',
+       'WEATHER_KEY', 'KA3', 'AI4',
+       'AK1', 'OE3', 'AW2', 'REM',
+       'OD2', 'CN4', 'AO1', 'CO1',
+       'OE2', 'CG1', 'AX6', 'KA2',
+       'CU2', 'AH3', 'OE1', 'MA1',
+       'CT1', 'AW4', 'AU3', 'GA5',
+       'UG1', 'GE1', 'AI3', 'GD1',
+       'CIG_Ceiling_Quality_Code', 'AX3',
+       'KD1', 'CIG_Ceiling_Height_Dimension',
+       'AW3', 'CV1', 'AY1', 'MV1',
+       'KA4', 'AJ1', 'WEATHER_DATE',
+       'CG2', 'KD2', 'DEW_Point_Temp',
+       'AH1', 'AU1', 'GL1', 'MW5',
+       'AU4', 'AT4', 'CN2', 'CV3',
+       'MW2', 'AT7', 'ED1', 'CU3',
+       'UG2', 'WD1', 'RH3', 'AT5',
+       'MW1', 'GK1', 'CU1', 'AA3',
+       'AM1', 'OD3', 'GA1', 'AT2',
+       'AI6', 'AT8', 'RH1', 'MW4',
+       'AA1', 'AN1', 'AH6', 'CF3',
+       'CF1', 'CIG_Ceiling_Determination_Code',
+       'AI2', 'CN1', 'CT3', 'GG4',
+       'CB1', 'GD2', 'GA4', 'KA1',
+       'AD1', 'WA1', 'AW1', 'MH1',
+       'KB2', 'KG1', 'AA2', 'GG2',
+       'KC1', 'OC1', 'IA1', 'AW5',
+       'WND_Direction_Angle', 'IA2', 'GJ1',
+       'GA3', 'GD5', 'CR1', 'CF2',
+       'DEW_Point_Quality_Code', 'AT1', 'KB1',
+       'GD3', 'KC2', 'CV2', 'AL2',
+       'AH5', 'KG2', 'ME1', 'AE1',
+       'AW6', 'AX1', 'KE1', 'SA1',
+       'OB1', 'AZ1', 'MD1', 'AA4',
+       'MV2', 'WND_Type_Code',
+       'TMP_Air_Temp_Quality_Code', 'GD4',
+       'AL1', 'GA6', 'OD1', 'AB1',
+       'CW1', 'AH4', 'SLP_Sea_Level_Pres',
+       'AX2', 'IB2', 'IB1', 'AX4',
+       'WND_Speed_Rate', 'AT6', 'KB3',
+       'MW6', 'AH2', 'GG1', 'AZ2',
+       'QUALITY_CONTROL', 'AY2', 'CH1',
+       'AU5', 'HL1', 'CIG_CAVOK_code',
+       'VIS_Distance_Dimension', 'GH1',
+       'WEATHER_STATION', 'AI5', 'GG3',
+       'AT3', 'MW3', 'CT2', 'KF1',
+       'RH2', 'EQD', 'CI1',
+ 'VIS_Distance_Quality_Code',
+ 'VIS_Quality_Variability_Code',
+ 'WEATHER_SOURCE',
+ 'WND_Quality_Code',
+ 'WND_Speed_Quality_Code']
+
+# COMMAND ----------
+
+weather2ColToKeep = ['WEATHER2_GN1', 'WEATHER2_GF1', 'WEATHER2_UA1', 'WEATHER2_AU2',
+       'WEATHER2_AX5', 'WEATHER2_TMP_Air_Temp', 'WEATHER2_MK1',
+       'WEATHER2_CN3', 'WEATHER2_GM1', 'WEATHER2_GA2',
+       'WEATHER2_SLP_Sea_Level_Pres_Quality_Code', 'WEATHER2_AW7',
+       'WEATHER2_MG1', 'WEATHER2_CG3', 'WEATHER2_VIS_Variability_Code',
+       'WEATHER2_GO1', 'WEATHER2_AL3', 'WEATHER2_AI1', 'WEATHER2_MF1',
+       'WEATHER2_WEATHER_KEY', 'WEATHER2_KA3', 'WEATHER2_AI4',
+       'WEATHER2_AK1', 'WEATHER2_OE3', 'WEATHER2_AW2', 'WEATHER2_REM',
+       'WEATHER2_OD2', 'WEATHER2_CN4', 'WEATHER2_AO1', 'WEATHER2_CO1',
+       'WEATHER2_OE2', 'WEATHER2_CG1', 'WEATHER2_AX6', 'WEATHER2_KA2',
+       'WEATHER2_CU2', 'WEATHER2_AH3', 'WEATHER2_OE1', 'WEATHER2_MA1',
+       'WEATHER2_CT1', 'WEATHER2_AW4', 'WEATHER2_AU3', 'WEATHER2_GA5',
+       'WEATHER2_UG1', 'WEATHER2_GE1', 'WEATHER2_AI3', 'WEATHER2_GD1',
+       'WEATHER2_CIG_Ceiling_Quality_Code', 'WEATHER2_AX3',
+       'WEATHER2_KD1', 'WEATHER2_CIG_Ceiling_Height_Dimension',
+       'WEATHER2_AW3', 'WEATHER2_CV1', 'WEATHER2_AY1', 'WEATHER2_MV1',
+       'WEATHER2_KA4', 'WEATHER2_AJ1', 'WEATHER2_WEATHER_DATE',
+       'WEATHER2_CG2', 'WEATHER2_KD2', 'WEATHER2_DEW_Point_Temp',
+       'WEATHER2_AH1', 'WEATHER2_AU1', 'WEATHER2_GL1', 'WEATHER2_MW5',
+       'WEATHER2_AU4', 'WEATHER2_AT4', 'WEATHER2_CN2', 'WEATHER2_CV3',
+       'WEATHER2_MW2', 'WEATHER2_AT7', 'WEATHER2_ED1', 'WEATHER2_CU3',
+       'WEATHER2_UG2', 'WEATHER2_WD1', 'WEATHER2_RH3', 'WEATHER2_AT5',
+       'WEATHER2_MW1', 'WEATHER2_GK1', 'WEATHER2_CU1', 'WEATHER2_AA3',
+       'WEATHER2_AM1', 'WEATHER2_OD3', 'WEATHER2_GA1', 'WEATHER2_AT2',
+       'WEATHER2_AI6', 'WEATHER2_AT8', 'WEATHER2_RH1', 'WEATHER2_MW4',
+       'WEATHER2_AA1', 'WEATHER2_AN1', 'WEATHER2_AH6', 'WEATHER2_CF3',
+       'WEATHER2_CF1', 'WEATHER2_CIG_Ceiling_Determination_Code',
+       'WEATHER2_AI2', 'WEATHER2_CN1', 'WEATHER2_CT3', 'WEATHER2_GG4',
+       'WEATHER2_CB1', 'WEATHER2_GD2', 'WEATHER2_GA4', 'WEATHER2_KA1',
+       'WEATHER2_AD1', 'WEATHER2_WA1', 'WEATHER2_AW1', 'WEATHER2_MH1',
+       'WEATHER2_KB2', 'WEATHER2_KG1', 'WEATHER2_AA2', 'WEATHER2_GG2',
+       'WEATHER2_KC1', 'WEATHER2_OC1', 'WEATHER2_IA1', 'WEATHER2_AW5',
+       'WEATHER2_WND_Direction_Angle', 'WEATHER2_IA2', 'WEATHER2_GJ1',
+       'WEATHER2_GA3', 'WEATHER2_GD5', 'WEATHER2_CR1', 'WEATHER2_CF2',
+       'WEATHER2_DEW_Point_Quality_Code', 'WEATHER2_AT1', 'WEATHER2_KB1',
+       'WEATHER2_GD3', 'WEATHER2_KC2', 'WEATHER2_CV2', 'WEATHER2_AL2',
+       'WEATHER2_AH5', 'WEATHER2_KG2', 'WEATHER2_ME1', 'WEATHER2_AE1',
+       'WEATHER2_AW6', 'WEATHER2_AX1', 'WEATHER2_KE1', 'WEATHER2_SA1',
+       'WEATHER2_OB1', 'WEATHER2_AZ1', 'WEATHER2_MD1', 'WEATHER2_AA4',
+       'WEATHER2_MV2', 'WEATHER2_WND_Type_Code',
+       'WEATHER2_TMP_Air_Temp_Quality_Code', 'WEATHER2_GD4',
+       'WEATHER2_AL1', 'WEATHER2_GA6', 'WEATHER2_OD1', 'WEATHER2_AB1',
+       'WEATHER2_CW1', 'WEATHER2_AH4', 'WEATHER2_SLP_Sea_Level_Pres',
+       'WEATHER2_AX2', 'WEATHER2_IB2', 'WEATHER2_IB1', 'WEATHER2_AX4',
+       'WEATHER2_WND_Speed_Rate', 'WEATHER2_AT6', 'WEATHER2_KB3',
+       'WEATHER2_MW6', 'WEATHER2_AH2', 'WEATHER2_GG1', 'WEATHER2_AZ2',
+       'WEATHER2_QUALITY_CONTROL', 'WEATHER2_AY2', 'WEATHER2_CH1',
+       'WEATHER2_AU5', 'WEATHER2_HL1', 'WEATHER2_CIG_CAVOK_code',
+       'WEATHER2_VIS_Distance_Dimension', 'WEATHER2_GH1',
+       'WEATHER2_WEATHER_STATION', 'WEATHER2_AI5', 'WEATHER2_GG3',
+       'WEATHER2_AT3', 'WEATHER2_MW3', 'WEATHER2_CT2', 'WEATHER2_KF1',
+       'WEATHER2_RH2', 'WEATHER2_EQD', 'WEATHER2_CI1',
+ 'WEATHER2_VIS_Distance_Quality_Code',
+ 'WEATHER2_VIS_Quality_Variability_Code',
+ 'WEATHER2_WEATHER_SOURCE',
+ 'WEATHER2_WND_Quality_Code',
+ 'WEATHER2_WND_Speed_Quality_Code']
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+# Custom-made class to assist with EDA on this dataset
+# The code is generalizable. However, specific decisions on plot types were made because
+# most features are categorical
+class Analyze:
+    def __init__(self, df):
+        self.df = df
+    
+    def remove_df():
+        self.df = None
+        gc.collect()
+        
+    def print_eda_summary(self):
+        #sns.set(rc={'figure.figsize':(10*2,16*8)})
+        sns.set()
+        i=0
+        fig, ax = plt.subplots(nrows=round(len(self.df.columns)), ncols=2, figsize=(16,5*round(len(self.df.columns))))
+        all_cols=[]
+        for col in self.df.columns:
+            if self.df[col].dtype.name == 'object'  or self.df[col].dtype.name == 'category': 
+                self.df[col] = self.df[col].astype('str')
+            all_cols.append(col)
+            max_len = self.df[col].nunique()
+            if max_len > 10:
+                max_len = 10
+            g=sns.countplot(y=self.df[col].fillna(-1), hue=self.df['DEP_DEL15'], order=self.df[col].fillna(-1).value_counts(dropna=False).iloc[:max_len].index, ax=ax[i][0])
+            g.set_xlim(0,self.df.shape[0])
+            plt.tight_layout()
+            ax[i][0].title.set_text(col)
+            ax[i][0].xaxis.label.set_visible(False)
+            xlabels = ['{:,.0f}'.format(x) + 'K' for x in g.get_xticks()/1000]
+            g.set_xticklabels(xlabels)
+            ax[i][1].axis("off")
+            # Basic info
+            desc = self.df[col].describe()
+            summary = "DESCRIPTION\n   Name: {:}\n   Type: {:}\n  Count: {:}\n Unique: {:}\nMissing: {:}\nPercent: {:2.3f}".format(
+                desc.name.ljust(50), str(desc.dtype).ljust(10), self.df[col].count(), self.df[col].nunique(),
+                ('yes' if self.df[col].hasnans else 'no'), (1-self.df[col].count()/self.df.shape[0])*100)
+            ax[i][1].text(0, 1, summary, verticalalignment="top", family='monospace', fontsize=12)
+            analysis=[]
+            if self.df[col].dtype.name == 'object': 
+                # additional analysis for categorical variables
+                if len(self.df[col].str.lower().unique()) != len(self.df[col].unique()):
+                    analysis.append("- duplicates from case\n")
+                # look for HTML escape characters (&#x..;)
+                # and unicode characters (searching for: anything not printable)
+                self.df_bad = self.df[col][self.df[col].str.contains(r'[\x00-\x1f]|&#x\d\d;', regex=True, na=True)]
+                if len(self.df_bad) - self.df.shape[0] - self.df[col].count()>0:
+                    analysis.append("- illegal chars: {:}\n".format(len(self.df_bad) - self.df.shape[0] - self.df[col].count()))
+                # find different capitalizations of "unknown"
+                # if more than one present, need to read as string, turn to lowercase, then make categorical
+                self.df_unknown = self.df[col].str.lower() == 'unknown'
+                unknowns = self.df[col][self.df_unknown].unique()
+                if len(unknowns) > 1:
+                    analysis.append("- unknowns\n  {:}\n".format(unknowns))
+                if len(''.join(analysis)) > 0:
+                    ax[i][1].text(.5, .85, 'FINDINGS\n'+''.join(analysis), verticalalignment="top", family='monospace', fontsize=12)
+            else:
+                # Stats for numeric variables
+                statistics = "STATS\n   Mean: {:5.4g}\n    Std: {:5.4g}\n    Min: {:5.4g}\n    25%: {:5.4g}\n    50%: {:5.4g}\n    75%: {:5.4g}\n    Max: {:5.4g}".format(
+                    desc.mean(), desc.std(), desc.min(), desc.quantile(.25), desc.quantile(.5), desc.quantile(.75), desc.max())
+                ax[i][1].text(.5, .85, statistics, verticalalignment="top", family='monospace', fontsize=12)
+
+            # Top 5 and bottom 5 unique values or all unique values if < 10
+            if self.df[col].nunique() <= 10:
+                values = pd.DataFrame(list(zip(self.df[col].value_counts(dropna=False).keys().tolist(),
+                                         self.df[col].value_counts(dropna=False).tolist())),
+                                columns=['VALUES', 'COUNTS'])
+                values = values.to_string(index=False)
+                ax[i][1].text(0, .6, values, verticalalignment="top", family='monospace', fontsize=12)
+            else:
+                values = pd.DataFrame(list(zip(self.df[col].value_counts(dropna=False).iloc[:5].keys().tolist(),
+                                         self.df[col].value_counts(dropna=False).iloc[:5].tolist())),
+                                columns=['VALUES', 'COUNTS'])
+                mid_row = pd.DataFrame({'VALUES':[":"],
+                                        'COUNTS':[":"]})
+                bot_values = pd.DataFrame(list(zip(self.df[col].value_counts(dropna=False).iloc[-5:].keys().tolist(),
+                                         self.df[col].value_counts(dropna=False).iloc[-5:].tolist())),
+                                columns=['VALUES', 'COUNTS'])
+                values = values.append(mid_row)
+                values = values.append(bot_values)
+                values = values.to_string(index=False)
+                ax[i][1].text(0, .6, values, verticalalignment="top", family='monospace', fontsize=12)
+            i=i+1
+        fig.show()
+
+# COMMAND ----------
+
+analyzer = Analyze(sample_panda_df[colToKeep])
+analyzer.print_eda_summary()
+
+# COMMAND ----------
+
+print(weather1ColToKeep)
+
+# COMMAND ----------
+
+cols  = weather1ColToKeep.append('DEP_DEL15')
+analyzer = Analyze(sample_panda_df[cols])
+analyzer.print_eda_summary()
+
+# COMMAND ----------
+
+analyzer = Analyze(sample_panda_df[weather1ColToKeep.append('DEP_DEL15')])
+analyzer.print_eda_summary()
+
+# COMMAND ----------
+
+sample_panda_df
+
+# COMMAND ----------
+
+# MAGIC %md **Note that above must be moved after feature engineering** 
+
+# COMMAND ----------
+
+# MAGIC %md # Data Wrangling and Cleaning
+
+# COMMAND ----------
+
+def clean_data(df):  
+    
+    #
+    # drop useless columns based on preliminary analysis
+    #
+    numericColumns = 
+    df = df.drop(columns=['XXX','YYY'])
+    
+    #
+    # get rid of hex char codes, keep the actual code number
+    #
+    char_treatment = [
+        'weird character field 1',
+        'weird character field 2'
+    ]
+    
+    print("-- replacing weird characters ...")
+    for col in char_treatment:
+        if df[col].dtype.name == 'object':
+            df[col] = df[col].str.replace(r'&#x(\d\d);', '\1', regex=True)
+            df[col] = df[col].str.replace(r'[\x00-\x1f]', '', regex=True)
+        else:
+            print("col", col,"flagged for char replacement is not of type string")
+            
+
+   # make all strings lower case
+    case_treatment = [
+        'string field 1',
+        'string field 2'
+    ]
+   
+    print("-- lower-casing where appropriate ...")
+    for col in case_treatment:
+        if df[col].dtype.name == 'object':
+            df[col] = df[col].str.lower()
+             
+    #
+    # Fix categorization discrepencies
+    #           
+    df.replace({'SmartScreen':
+        {'Enabled':'on',
+         'RequiredAdmin':'requireadmin',
+         'of':'off',
+         'Promt':'prompt',
+         'Promprt':'prompt'}})
+            
+    #
+    # make strings into categories
+    #
+    categories = [
+        'SmartScreen',
+        'Census_InternalBatteryType',
+        'Census_ChassisTypeName',
+        'Census_OSEdition',
+        'Census_PowerPlatformRoleName',
+        'OsBuildLab'
+    ]
+    
+    print("-- making categories from strings that needed massaging ...")
+    for col in categories:
+        df[col] = df[col].astype('category')
+
+        
+    #
+    # add 'unknown' categories where necessary and replace the NAs
+    # ADD COLUMNS NAMES HERE TO HAVE THEIR CATEGORIES AUGMENTED AND NAS FILLED WITH 'unknown'
+    #
+    
+    categories = [
+        'SmartScreen',
+        'Census_PrimaryDiskTypeName',  # ['HDD' 'SSD' 'UNKNOWN' 'Unspecified']
+        'Census_InternalBatteryType',
+        'Census_OSEdition',
+        'Census_PowerPlatformRoleName', # also had 'unknown' as well as Nas
+        'Census_GenuineStateName',       # and this one too
+        'Census_ChassisTypeName'
+        
+    ]
+
+    print("-- adding categories ..")
+    for col in categories:
+        print("   ", col)
+        if 'unknown' not in df[col].cat.categories:
+            df[col].cat.add_categories(['unknown'], inplace=True)
+        df[col].fillna('unknown', inplace=True)
+    # add one manually because it needs a special unknown value
+    df["OsBuildLab"].cat.add_categories(["0.0.-.-.0-0"], inplace=True)
+    df["OsBuildLab"].fillna("0.0.-.-.0-0", inplace=True)
+    # and this one already had some 'unknown' values
+    #df['Census_ChassisTypeName'].fillna('unknown', inplace=True)
+
+
+    #
+    # flag and fill selected NAs
+    # ADD COLUMN NAMES HERE IN nafill TO HAVE COLUMNS FLAGGED AND FILLED WITH PROVIDED VALUES
+    #   
+    print("-- replacing selected NA values")
+    nafill = {
+        "RtpStateBitfield":0,
+        "DefaultBrowsersIdentifier":0,
+        "AVProductStatesIdentifier":0,
+        "AVProductsInstalled":0,
+        "AVProductsEnabled":0,
+        "CityIdentifier":0,
+        "OrganizationIdentifier":0,
+        "GeoNameIdentifier":0,
+        "IsProtected":0,
+        "SMode":0,
+        "IeVerIdentifier":0,
+        "Firewall":0,
+        "UacLuaenable":0,
+        "Census_OEMNameIdentifier":0,
+        "Census_OEMModelIdentifier":0,
+        "Census_ProcessorCoreCount":0,
+        "Census_ProcessorManufacturerIdentifier":0,
+        "Census_ProcessorModelIdentifier":0,
+        "Census_PrimaryDiskTotalCapacity":0,
+        "Census_SystemVolumeTotalCapacity":0,
+        "Census_TotalPhysicalRAM":0,
+        "Census_InternalPrimaryDiagonalDisplaySizeInInches":0,
+        "Census_InternalPrimaryDisplayResolutionHorizontal":0,
+        "Census_InternalPrimaryDisplayResolutionVertical":0,
+        "Census_InternalBatteryNumberOfCharges":0,
+        "Census_OSInstallLanguageIdentifier":0,
+        "Census_IsFlightingInternal":0,
+        "Census_IsFlightsDisabled":0,
+        "Census_ThresholdOptIn":0,
+        "Census_FirmwareManufacturerIdentifier":0,
+        "Census_IsWIMBootEnabled":0,
+        "Census_IsVirtualDevice":0,
+        "Census_IsAlwaysOnAlwaysConnectedCapable":0,
+        "Wdft_IsGamer":0,
+        "Wdft_RegionIdentifier":0,
+        "Census_FirmwareVersionIdentifier":0
+    }
+
+    for col in nafill:
+        df[col+'_wasna'] = df[col].isna()
+    df.fillna(value=nafill, inplace=True)
+    
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+
 
 # COMMAND ----------
 
@@ -1480,10 +2071,6 @@ for i in numcolumns_miss:
   if meanvalue:
     print(i, meanvalue[0][0]) 
     cleaned_airlines_sample=cleaned_airlines_sample.na.fill({i:meanvalue[0][0]})
-
-# COMMAND ----------
-
-
 
 # COMMAND ----------
 
@@ -1611,11 +2198,243 @@ weatherAvgData = spark.sql("""select station, year(DATE) as YEAR, month(DATE) as
 # MAGIC                                      ELSE int(substr(VIS, 1, 6)) END) AS VIS_AVG,
 # MAGIC                             AVG(CASE WHEN SUBSTR(DEW, 1, 5) == '+9999' THEN null
 # MAGIC                                      ELSE int(substr(DEW, 1, 5)) END) AS DEW_AVG,
-# MAGIC                             AVG(CASE WHEN SUBSTR(DEW, ))
-# MAGIC                             FROM weather_raw_df GROUP BY station, YEAR, MONTH, DAY;
+# MAGIC                             FROM weather_processed GROUP BY station, YEAR, MONTH, DAY;
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT WEATHER_STATION, year(DATE) AS YEAR, month(DATE) AS MONTH, 
+# MAGIC                             dayofmonth(DATE) AS DAY, count(*) AS TOTAL, 
+# MAGIC                             AVG(CASE WHEN WND_Direction_Angle == 999 THEN null 
+# MAGIC                                      ELSE WND_Direction_Angle END) AS WND_ANGLE_AVG,
+# MAGIC                             AVG(CASE WHEN WND_Speed_Rate == 9999 THEN null
+# MAGIC                                      ELSE WND_Speed_Rate END) AS WND_SPEED_AVG,
+# MAGIC                             AVG(CASE WHEN CIG_Ceiling_Height_Dimension == 99999 THEN null
+# MAGIC                                      ELSE CIG_Ceiling_Height_Dimension END) AS CIG_AVG,
+# MAGIC                             AVG(CASE WHEN VIS_Distance_Dimension == 999999 THEN null
+# MAGIC                                      ELSE VIS_Distance_Dimension END) AS VIS_AVG,
+# MAGIC                             AVG(CASE WHEN DEW_Point_Temp == +9999 THEN null
+# MAGIC                                      ELSE DEW_Point_Temp END) AS DEW_AVG,
+# MAGIC                             FROM weather_processed GROUP BY WEATHER_STATION, YEAR, MONTH, DAY;
+
+# COMMAND ----------
+
+# Maybe we do an inner join with airport station id's and weather and then run query below and select on the airport station id.  Then we can use that to go back to our final join 
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT WEATHER_STATION, 
+# MAGIC        year(WEATHER_DATE) AS YEAR, 
+# MAGIC        month(WEATHER_DATE) AS MONTH, 
+# MAGIC        dayofmonth(WEATHER_DATE) AS DAY, 
+# MAGIC        count(*) AS TOTAL, 
+# MAGIC        AVG(CASE WHEN WND_Direction_Angle == 999 THEN null 
+# MAGIC            ELSE WND_Direction_Angle END) AS WND_ANGLE_AVG,
+# MAGIC        AVG(CASE WHEN WND_Speed_Rate == 9999 THEN null
+# MAGIC            ELSE WND_Speed_Rate END) AS WND_SPEED_AVG,
+# MAGIC        AVG(CASE WHEN CIG_Ceiling_Height_Dimension == 99999 THEN null
+# MAGIC            ELSE CIG_Ceiling_Height_Dimension END) AS CIG_AVG,
+# MAGIC        AVG(CASE WHEN VIS_Distance_Dimension == 999999 THEN null
+# MAGIC            ELSE VIS_Distance_Dimension END) AS VIS_AVG,
+# MAGIC        AVG(CASE WHEN DEW_Point_Temp == 9999 THEN null
+# MAGIC            ELSE DEW_Point_Temp END) AS DEW_AVG
+# MAGIC FROM weather_processed 
+# MAGIC GROUP BY WEATHER_STATION, YEAR, MONTH, DAY;
+
+# COMMAND ----------
+
+def create_composite_weather_key(d, k):
+    datestr = d.strftime("%Y-%m-%dT%H:%M:%S.%f%z")
+    date, time = datestr.split("T")
+    date_components = date.split("-")
+    id_date_portion = "".join(date_components)
+    id_hour_portion = time[:2]
+    id_datetime_portion = id_date_portion+id_hour_portion
+    the_id = "-".join([k,id_datetime_portion])
+    return the_id
+#create_composite_weather_key = udf(create_composite_weather_key)
+spark.udf.register("create_composite_weather_key", create_composite_weather_key)
+
+# COMMAND ----------
+
+def getHour(date):
+    datestr = date.strftime("%Y-%m-%dT%H:%M:%S.%f%z")
+    date, time = datestr.split("T")
+    id_hour_portion = time[:2]
+    return id_hour_portion
+spark.udf.register("getHour", getHour)
 
 # COMMAND ----------
 
 weather_raw_df.createOrReplaceTempView('weather_raw_df')
 # weatherAvgData.createOrReplaceTempView("weather_daily")
 # display(weather_daily)
+
+# COMMAND ----------
+
+display(weather_processed)
+
+# COMMAND ----------
+
+def process_weather_data(df):
+  WND_col = f.split(df['WND'], ',')
+  CIG_col = f.split(df['CIG'], ',')
+  VIS_col = f.split(df['VIS'], ',')
+  TMP_col = f.split(df['TMP'], ',')
+  DEW_col = f.split(df['DEW'], ',')
+  SLP_col = f.split(df['SLP'], ',')
+  df = (df
+    .withColumn("STATION", f.lpad(df.STATION, 11, '0'))
+    # WND Fields [direction angle, quality code, type code, speed rate, speed quality code]
+    .withColumn('WND_Direction_Angle', WND_col.getItem(0).cast('int')) # continuous
+    .withColumn('WND_Quality_Code', WND_col.getItem(1).cast('int')) # categorical
+    .withColumn('WND_Type_Code', WND_col.getItem(2).cast('string')) # categorical
+    .withColumn('WND_Speed_Rate', WND_col.getItem(3).cast('int')) # categorical
+    .withColumn('WND_Speed_Quality_Code', WND_col.getItem(4).cast('int')) # categorical
+    # CIG Fields
+    .withColumn('CIG_Ceiling_Height_Dimension', CIG_col.getItem(0).cast('int')) # continuous 
+    .withColumn('CIG_Ceiling_Quality_Code', CIG_col.getItem(1).cast('int')) # categorical
+    .withColumn('CIG_Ceiling_Determination_Code', CIG_col.getItem(2).cast('string')) # categorical 
+    .withColumn('CIG_CAVOK_code', CIG_col.getItem(3).cast('string')) # categorical/binary
+    # VIS Fields
+    .withColumn('VIS_Distance_Dimension', VIS_col.getItem(0).cast('int')) # continuous
+    .withColumn('VIS_Distance_Quality_Code', VIS_col.getItem(1).cast('int')) # categorical
+    .withColumn('VIS_Variability_Code', VIS_col.getItem(2).cast('string')) # categorical/binary
+    .withColumn('VIS_Quality_Variability_Code', VIS_col.getItem(3).cast('int')) # categorical
+    # TMP Fields
+    .withColumn('TMP_Air_Temp', TMP_col.getItem(0).cast('int')) # continuous
+    .withColumn('TMP_Air_Temp_Quality_Code', TMP_col.getItem(1).cast('string')) # categorical
+    # DEW Fields
+    .withColumn('DEW_Point_Temp', DEW_col.getItem(0).cast('int')) # continuous
+    .withColumn('DEW_Point_Quality_Code', DEW_col.getItem(1).cast('string')) # categorical
+    # SLP Fields
+    .withColumn('SLP_Sea_Level_Pres', SLP_col.getItem(0).cast('int')) # continuous
+    .withColumn('SLP_Sea_Level_Pres_Quality_Code', SLP_col.getItem(1).cast('int')) # categorical
+    # SNOW Fields
+    
+    .withColumnRenamed("DATE", "WEATHER_DATE")
+    .withColumnRenamed("SOURCE", "WEATHER_SOURCE")
+    .withColumnRenamed("STATION", "WEATHER_STATION")
+       )
+
+
+  cols = set(df.columns)
+  remove_cols = set(['LATITUDE', 'LONGITUDE', 'ELEVATION', 'NAME', 'REPORT_TYPE', 'CALL_SIGN', 'WND', 'CIG','VIS','TMP', 'DEW', 'SLP'])
+  cols = list(cols - remove_cols)
+  return df.select(cols)
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+# MAGIC %md ## PageRank Features
+
+# COMMAND ----------
+
+flights_processed_pr = spark.sql("SELECT * from flights_processed")
+
+# COMMAND ----------
+
+display(flights_processed_pr) 
+
+# COMMAND ----------
+
+!pip install networkx
+
+# COMMAND ----------
+
+import networkx as nx 
+# airlineGraph = {'nodes': flights_processed_pr.select('ORIGIN', 'DEST').rdd.flatMap(list).distinct().collect(), 
+#                 'edges': flights_processed_pr.select('ORIGIN', 'DEST').rdd.map(tuple).collect()}
+
+# directedGraph = nx.DiGraph()
+# directedGraph.add_nodes_from(airlineGraph['nodes'])
+# directedGraph.add_edges_from(airlineGraph['edges'])
+
+pageRank = nx.pagerank(directedGraph, alpha = 0.85)
+pandasPageRank = pd.DataFrame(pageRank.items(), columns = ['Station', 'PageRank'])
+pandasPageRank = spark.createDataFrame(pandasPageRank)
+pandasPageRank.createOrReplaceTempView("pandasPageRank")
+flights_processed_pr.createOrReplaceTempView("flights_processed_pr")
+# Now we want to separate the pagerank for the stations based on destination and origin
+flights_processed_pr = spark.sql("SELECT * from flights_processed_pr LEFT JOIN pandasPageRank ON flights_processed_pr.ORIGIN == pandasPageRank.Station").drop('Station')
+flights_processed_pr = flights_processed_pr.withColumnRenamed('PageRank', 'PAGERANK_ORIGIN')
+flights_processed_pr.createOrReplaceTempView("flights_processed_pr")
+# Repeat for Dest
+flights_processed_pr = spark.sql("SELECT * from flights_processed_pr LEFT JOIN pandasPageRank ON flights_processed_pr.DEST == pandasPageRank.Station").drop('Station')
+flights_processed_pr = flights_processed_pr.withColumnRenamed('PageRank', 'PAGERANK_DEST')
+flights_processed_pr.createOrReplaceTempView('flights_processed_pr')
+display(flights_processed_pr)
+
+# COMMAND ----------
+
+# MAGIC %md # Feature Engineering
+
+# COMMAND ----------
+
+stages = []
+def oneHotEncoder(catCols):
+  for categoricalCol in cat_cols:
+      stringIndexer = StringIndexer(inputCol = categoricalCol, outputCol = categoricalCol + 'Index')
+      encoder = OneHotEncoderEstimator(inputCols=[stringIndexer.getOutputCol()], outputCols=[categoricalCol + "classVec"])
+  return catCols
+
+stages += [stringIndexer, encoder]
+assemblerInputs = [c + "classVec" for c in cat_cols] + num_cols
+assembler = VectorAssembler(inputCols=assemblerInputs, outputCol="features")
+stages += [assembler]
+
+# COMMAND ----------
+
+def encodeData():
+  numericColumns
+  categoricalColumns
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC # Split the train/validation/test sets and normalize the data
+
+# COMMAND ----------
+
+# MAGIC %md # Split data into train, test, validation
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+# data distribution across RDD partitions is not idempotent, and could be rearranged or updated during the query execution, thus affecting the output of the randomSplit method
+# to resolve the issue, we can repartition, or apply an aggregate function, or we can cache (https://kb.databricks.com/data/random-split-behavior.html)
+# also add a unique ID (monotonically_increasing_id)
+flightsCache = airlines_sample.withColumn("id", f.monotonically_increasing_id()).cache()
+
+flightsCache = flightsCache.na.drop(subset=["DEP_DEL15"])
+
+# COMMAND ----------
+
+# function to create stratified train, test and validate sets from supplied ratios 
+def generate_train_test_validate_sets(train_ratio, test_ratio, df, label, join_on, seed):
+    reserved_size = 1-train_ratio
+    
+    fractions = df.select(label).distinct().withColumn("fraction", f.lit(train_ratio)).rdd.collectAsMap()
+    df_train = df.stat.sampleBy(label, fractions, seed)
+    df_remaining = df.join(df_train, on=join_on, how="left_anti")
+    
+    reserved_size = 1 - (test_ratio / reserved_size)
+
+    fractions = df_remaining.select(label).distinct().withColumn("fraction", f.lit(reserved_size)).rdd.collectAsMap()
+    df_test = df_remaining.stat.sampleBy(label, fractions, seed)
+    df_validate = df_remaining.join(df_test, on=join_on, how="left_anti")
+   
+    return df_train, df_test, df_validate
+
+# create our train, validate, and test sets for modeling, analysis and final confirmation
+df_train, df_test, df_validate = generate_train_test_validate_sets(train_ratio=.8, test_ratio=.1, df=flightsCache, label='DEP_DEL15', join_on="id", seed=42)
+
+
+
