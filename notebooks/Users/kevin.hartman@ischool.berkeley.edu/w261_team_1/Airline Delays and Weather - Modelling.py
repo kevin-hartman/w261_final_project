@@ -67,22 +67,78 @@ spark.conf.set("spark.sql.shuffle.partitions", 8)
 # MAGIC ### 2. Data Sources
 # MAGIC ### 3. Question Formulation
 # MAGIC ### 4. Data Lake Prep
-# MAGIC ### 5. EDA
-# MAGIC ### 6. Feature Engineering
-# MAGIC ### 7. Algorithm Exploration
-# MAGIC ### 8. Algorithm Implementation
+# MAGIC ### 5. Exploratory Data Analysis
+# MAGIC ### 6. Data Wrangling, Cleanup and Prep
+# MAGIC ### 7. Model Exploration (Pipeline)
+# MAGIC #### a. Feature Selection
+# MAGIC #### b. Feature Engineering
+# MAGIC #### c. Transformations (Encoding & Scaling)
+# MAGIC #### d. Evaluation
+# MAGIC ### 8. Model Selection and Tuning
 # MAGIC ### 9. Conclusion
 # MAGIC ### (10. Application of Course Concepts)
 
 # COMMAND ----------
 
-flights_and_weather_combined_processed = spark.sql("SELECT * FROM flights_and_weather_combined_processed")
+flights_and_weather_combined_processed = spark.sql("SELECT * FROM flights_and_weather_combined_processed WHERE CANCELLED = 0")
 
-flights_train = spark.sql("SELECT * FROM flights_and_weather_combined_processed WHERE YEAR IN (2015, 2016, 2017)")
-flights_validate = spark.sql("SELECT * FROM flights_and_weather_combined_processed WHERE YEAR = 2018;")
-flights_test = spark.sql("SELECT * FROM flights_and_weather_combined_processed WHERE YEAR = 2019;")
+#flights_train = spark.sql("SELECT * FROM flights_and_weather_combined_processed WHERE YEAR IN (2015, 2016, 2017)")
+#flights_validate = spark.sql("SELECT * FROM flights_and_weather_combined_processed WHERE YEAR = 2018;")
+#flights_test = spark.sql("SELECT * FROM flights_and_weather_combined_processed WHERE YEAR = 2019;")
 
-flights_train_sample = flights_train.sample(False, 0.01)
+#flights_train_sample = flights_train.sample(False, 0.01)
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT *
+# MAGIC FROM flights_and_weather_combined_processed
+# MAGIC WHERE DEP_DEL15 IS NULL AND CRS_DEP_TIME - DEP_TIME == 0 AND CANCELLED = 0
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Assumptions for NULL **DEP_DEL15** values:
+# MAGIC * Most are cancelled - drop those rows for now. Will revisit cancellations later.
+# MAGIC * If DEP_DEL_15 is NULL and the difference between schedule departure and actual departure is 0 , set DEP_DEL15 -> 0
+# MAGIC * If DEP_DEL_15 is NULL and the difference between schedule departure and actual departure is not 0 (5 records), -> drop records
+
+# COMMAND ----------
+
+flights_and_weather_combined_processed = spark.sql("SELECT * FROM flights_and_weather_combined_processed WHERE CANCELLED = 0")
+
+# COMMAND ----------
+
+flights_and_weather_combined_processed.count()
+
+# COMMAND ----------
+
+display(flights_and_weather_combined_processed.select('DEP_DEL15').distinct())
+
+# COMMAND ----------
+
+def fix_missing_dep_del15(dep_del_15, scheduled_dep_time, actual_dep_time):
+    '''Fixes missing DEP_DEL15 value, else returns existing value'''
+    diff = scheduled_dep_time - actual_dep_time
+    if  diff < 15:
+        return 0
+    elif diff >= 15 and diff <100:
+        return 1
+    else:
+        return None
+fix_missing_dep_del15 = udf(fix_missing_dep_del15)
+
+# COMMAND ----------
+
+flights_and_weather_combined_processed = flights_and_weather_combined_processed.withColumn("DEP_DEL15", f.when(flights_and_weather_combined_processed["DEP_DEL15"].isNull(), fix_missing_dep_del15("DEP_DEL15","CRS_DEP_TIME","DEP_TIME")).otherwise(flights_and_weather_combined_processed["DEP_DEL15"]))
+
+# COMMAND ----------
+
+flights_and_weather_combined_processed.where('DEP_DEL15 IS NULL').count()
+
+# COMMAND ----------
+
+flights_and_weather_combined_processed = flights_and_weather_combined_processed.where('DEP_DEL15 IS NOT NULL')
 
 # COMMAND ----------
 
@@ -927,21 +983,12 @@ analyzer.print_eda_summary()
 
 # COMMAND ----------
 
-cols = weather1ColToKeep[len(weather1ColToKeep)//2:]
-print(cols)
-
-# COMMAND ----------
-
 from copy import deepcopy
 cols = weather1ColToKeep[len(weather1ColToKeep)//2:]
 cols.append('DEP_DEL15')
 analyze_df = deepcopy(flights_train_sample_pdf[cols])
 analyzer = Analyze(analyze_df)
 analyzer.print_eda_summary()
-
-# COMMAND ----------
-
-weatherBaselineCol = ['WEATHER2_WEATHER_KEY', 'WEATHER2_WEATHER_SOURCE', 'WEATHER2_WND_SPEED_RATE', 'WEATHER2_VIS_DISTANCE_DIMENSION', 'WEATHER2_DEW_POINT_TEMP', 'WEATHER2_WND_DIRECTION_ANGLE', 'WEATHER2_CIG_CEILING_HEIGHT_DIMENSION', 'WEATHER2_TMP_AIR_TEMP']
 
 # COMMAND ----------
 
@@ -954,41 +1001,6 @@ weatherBaselineCol = ['WEATHER2_WEATHER_KEY', 'WEATHER2_WEATHER_SOURCE', 'WEATHE
 # COMMAND ----------
 
 def clean_data(df):  
-    # drop useless columns based on preliminary analysis
-    '''
-    columns_to_drop = ['DIV4_LONGEST_GTIME', 'DIV4_TOTAL_GTIME', 'DIV3_WHEELS_ON',
-       'DIV3_TOTAL_GTIME', 'DIV3_LONGEST_GTIME', 'DIV3_WHEELS_OFF',
-       'DIV3_TAIL_NUM', 'DIV4_AIRPORT', 'DIV4_AIRPORT_ID',
-       'DIV4_AIRPORT_SEQ_ID', 'DIV4_WHEELS_ON', 'DIV4_WHEELS_OFF',
-       'DIV3_AIRPORT', 'DIV4_TAIL_NUM', 'DIV5_AIRPORT', 'DIV5_AIRPORT_ID',
-       'DIV5_AIRPORT_SEQ_ID', 'DIV5_WHEELS_ON', 'DIV5_TOTAL_GTIME',
-       'DIV5_LONGEST_GTIME', 'DIV5_WHEELS_OFF', 'DIV5_TAIL_NUM',
-       'DIV3_AIRPORT_SEQ_ID', 'DIV3_AIRPORT_ID', 'DIV2_WHEELS_OFF',
-       'DIV2_TAIL_NUM', 'DIV2_AIRPORT_ID', 'DIV2_TOTAL_GTIME',
-       'DIV2_WHEELS_ON', 'DIV2_AIRPORT_SEQ_ID', 'DIV2_AIRPORT',
-       'DIV2_LONGEST_GTIME', 'DIV_ARR_DELAY', 'DIV_ACTUAL_ELAPSED_TIME',
-       'DIV1_WHEELS_OFF', 'DIV1_TAIL_NUM', 'DIV_DISTANCE',
-       'DIV_REACHED_DEST', 'DIV1_AIRPORT_ID', 'DIV1_AIRPORT_SEQ_ID',
-       'DIV1_AIRPORT', 'DIV1_TOTAL_GTIME', 'DIV1_LONGEST_GTIME',
-       'DIV1_WHEELS_ON', 'TOTAL_ADD_GTIME', 'FIRST_DEP_TIME',
-       'LONGEST_ADD_GTIME', 'CANCELLATION_CODE', 'YEAR', 'OP_UNIQUE_CARRIER',
-       'OP_CARRIER_AIRLINE_ID', 'OP_CARRIER', 'OP_CARRIER_FL_NUM', 'ORIGIN_AIRPORT_ID',
-       'ORIGIN_AIRPORT_SEQ_ID', 'ORIGIN_CITY_MARKET_ID','ORIGIN_STATE_ABR', 
-       'ORIGIN_STATE_FIPS', 'ORIGIN_STATE_NM', 'ORIGIN_WAC', 'DEST_AIRPORT_ID', 
-       'DEST_AIRPORT_SEQ_ID', 'DEST_CITY_MARKET_ID','DEST_STATE_ABR',
-       'DEST_STATE_FIPS', 'DEST_STATE_NM', 'DEST_WAC', 'CRS_DEP_TIME', 'DEP_TIME', 
-       'DEP_TIME_BLK', 'TAXI_OUT','WHEELS_OFF', 'WHEELS_ON','TAXI_IN', 'CRS_ARR_TIME',
-       'ARR_TIME', 'ARR_DELAY', 'ARR_DELAY_NEW', 'ARR_DEL15', 'ARR_DELAY_GROUP',
-       'ARR_TIME_BLK', 'CANCELLED', 'DIVERTED', 'CRS_ELAPSED_TIME', 'ACTUAL_ELAPSED_TIME',
-       'AIR_TIME', 'FLIGHTS', 'DISTANCE_GROUP', 'CARRIER_DELAY', 'WEATHER_DELAY',
-       'NAS_DELAY', 'SECURITY_DELAY', 'LATE_AIRCRAFT_DELAY','DIV_AIRPORT_LANDINGS', 
-       'IN_FLIGHT_AIR_DELAY', 'DAY_OF_MONTH', 'CRS_DEP_TIME_HOUR', 'IATA_ORIGIN', 
-       'NEAREST_STATION_ID_ORIGIN', 'NEAREST_STATION_DIST_ORIGIN', 'IATA_DEST', 
-       'NEAREST_STATION_ID_DEST', 'NEAREST_STATION_DIST_DEST', 'IATA', 
-       'AIRPORT_TZ_NAME', 'FLIGHT_TIME_UTC', 'WEATHER_PREDICTION_TIME_UTC', 
-       'ORIGIN_WEATHER_KEY', 'DEST_WEATHER_KEY']
-    
-    df = df.drop(*columns_to_drop)'''    
     
     final_cols_to_keep = ['YEAR','QUARTER','MONTH', 'DAY_OF_WEEK', 'DAY_OF_MONTH','OP_UNIQUE_CARRIER', 
        'ORIGIN', 'DEST', 'DEP_DELAY', 'DEP_DELAY_NEW', 'DEP_DEL15', 'ACTUAL_ELAPSED_TIME', 
@@ -1054,19 +1066,275 @@ def clean_data(df):
 
 # COMMAND ----------
 
-# MAGIC %md # Feature Engineering
+# MAGIC %md # Missing Data
 
 # COMMAND ----------
 
-# MAGIC %md ## Airline Features
+def correct_missing_codes(df):
+    missing_value_ref = {'WEATHER1_TMP_AIR_TEMP': 9999,
+                       'WEATHER1_CIG_CEILING_HEIGHT_DIMENSION': 99999,
+                       'WEATHER1_DEW_POINT_TEMP': 9999,
+                       'WEATHER1_WND_DIRECTION_ANGLE': 999,
+                       'WEATHER1_SLP_SEA_LEVEL_PRES': 99999,
+                       'WEATHER1_WND_SPEED_RATE': 9999,
+                       'WEATHER1_VIS_DISTANCE_DIMENSION': 999999,
+                       'WEATHER2_TMP_AIR_TEMP': 9999,
+                       'WEATHER2_CIG_CEILING_HEIGHT_DIMENSION': 99999,
+                       'WEATHER2_DEW_POINT_TEMP': 9999,
+                       'WEATHER2_WND_DIRECTION_ANGLE': 999,
+                       'WEATHER2_SLP_SEA_LEVEL_PRES': 99999,
+                       'WEATHER2_WND_SPEED_RATE': 9999,
+                       'WEATHER2_VIS_DISTANCE_DIMENSION': 999999}
+    
+    for col in missing_value_ref.keys():
+        df = df.withColumn(col, f.when(df[col] == missing_value_ref[col], f.lit(None)).otherwise(df[col]))
+    
+    return df
+
+def impute_missing_values(df):
+  missing_count_list = []
+  for c in df.columns:
+      if df.where(f.col(c).isNull()).count() > 0:
+          tup = (c,int(df.where(f.col(c).isNull()).count()))
+          missing_count_list.append(tup)
+
+  missing_column_list = [x[0] for x in missing_count_list]
+  missing_df = df.select(missing_column_list)
+
+  missing_cat_columns = [item[0] for item in missing_df.dtypes if item[1].startswith('string') and item != "YEAR"]  # string 
+  print("\nCategorical Columns with missing data:", missing_cat_columns)
+
+  missing_num_columns = [item[0] for item in missing_df.dtypes if item[1].startswith('int') | item[1].startswith('double')] # will select name of column with integer or double data type
+  print("\nNumerical Columns with missing data:", missing_num_columns)
+  
+  # Fill the missing categorical values with the most frequent category 
+  for x in missing_cat_columns:                  
+    mode = df.groupBy(x).count().sort(f.col("count").desc()).collect()
+    if mode:
+      #print(x, mode[0][0]) #print name of columns and it's most categories 
+      df = df.withColumn(x, f.when(df[x].isNull(), f.lit(mode[0][0])).otherwise(df[x]))
+
+  # Fill the missing numerical values with the average of each #column
+  for i in missing_num_columns:
+    mean_value = df.select(f.round(f.mean(i))).collect()
+    mean_value = df.select(f.mean(i).cast(IntegerType())).collect()
+    
+    if mean_value:
+        #print(i, mean_value[0][0]) 
+        df = df.withColumn(i, f.when(df[i].isNull(), mean_value[0][0]).otherwise(df[i]))
+  
+  return df
 
 # COMMAND ----------
 
-# MAGIC %md ## Weather Features
+#cleaned_data = clean_data(flights_and_weather_combined_processed.sample(0.01, False)) # clean and cast our data to appropriate data types
+cleaned_data = clean_data(flights_and_weather_combined_processed) # clean and cast our data to appropriate data types
+cols_to_drop = [ 'DEP_DELAY', 'DEP_DELAY_NEW', 'ACTUAL_ELAPSED_TIME', 
+       'AIR_TIME','CARRIER_DELAY','WEATHER_DELAY', 'NAS_DELAY','SECURITY_DELAY',
+       'LATE_AIRCRAFT_DELAY','IN_FLIGHT_AIR_DELAY']
+cleaned_data = cleaned_data.drop(*cols_to_drop)
+cleaned_data = cleaned_data.createOrReplaceTempView('cleaned_data')
+cleaned_data = spark.sql('SELECT * FROM cleaned_data')
+dbutils.fs.rm('/airline_delays/kevin/DLRS/flights_baseline/processed', recurse=True)
+cleaned_data.write.option('mergeSchema', True).mode('overwrite').format('delta').save('/airline_delays/kevin/DLRS/flights_baseline/processed')
 
 # COMMAND ----------
 
-display(weather_processed_df)
+# MAGIC %sql
+# MAGIC 
+# MAGIC DROP TABLE IF EXISTS flights_and_weather_combined_processed_baseline;
+# MAGIC 
+# MAGIC CREATE TABLE flights_and_weather_combined_processed_baseline
+# MAGIC USING DELTA
+# MAGIC LOCATION "/airline_delays/kevin/DLRS/flights_baseline/processed"
+
+# COMMAND ----------
+
+cleaned_data_with_missing_values_corrected = correct_missing_codes(spark.sql("SELECT * FROM flights_and_weather_combined_processed_baseline"))
+data_ready_for_model = impute_missing_values(cleaned_data_with_missing_values_corrected)
+data_ready_for_model.createOrReplaceTempView('data_ready_for_model')
+
+# COMMAND ----------
+
+# MAGIC %md # Pipelining
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC First we need to drop columns we can't use at inference time.
+
+# COMMAND ----------
+
+display(data_ready_for_model)
+
+# COMMAND ----------
+
+# MAGIC %md ## Split data into train, validation, test
+
+# COMMAND ----------
+
+train_data = spark.sql("SELECT * FROM data_ready_for_model WHERE YEAR IN (2015, 2016, 2017)").drop('YEAR')
+validation_data = spark.sql("SELECT * FROM data_ready_for_model WHERE YEAR = 2018;").drop('YEAR')
+test_data = spark.sql("SELECT * FROM data_ready_for_model WHERE YEAR = 2019;").drop('YEAR')
+
+train_data.createOrReplaceTempView('train_data')
+validation_data.createOrReplaceTempView('validation_data')
+test_data.createOrReplaceTempView('test_data')
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Routines to encode and scale our features
+# MAGIC 
+# MAGIC We encode and scale only on train data and set up the transformation pipeline with those stages so it may be applied on validate and test data later
+
+# COMMAND ----------
+
+# MAGIC %md ### Encoding Function
+
+# COMMAND ----------
+
+# Use the OneHotEncoderEstimator to convert categorical features into one-hot vectors
+# Use VectorAssembler to combine vector of one-hots and the numerical features
+# Append the process into the stages array to reproduce
+
+def create_encoding_stages(data, label_name):
+  
+  cat_cols = [item[0] for item in data.dtypes if item[1].startswith('string')]
+  numeric_cols = [item[0] for item in data.dtypes if item[1].startswith('int') | item[1].startswith('double')]
+  numeric_cols.remove(label_name)
+  
+  # One-Hot Encode Categorical Columns in the vector
+  string_indexer = StringIndexer(inputCols=cat_cols, outputCols=[c + '_idx' for c in cat_cols] , handleInvalid = 'keep') 
+  encoder = OneHotEncoder(inputCols= [c + '_idx' for c in cat_cols], outputCols = [c + '_enc' for c in cat_cols])
+
+  # Deal with Numeric Features
+  vector_num_assembler = VectorAssembler(inputCols = numeric_cols, outputCol = 'unscaled_features', handleInvalid = 'keep')
+  scaler = StandardScaler(inputCol = 'unscaled_features', outputCol = 'scaled_features', withStd = True, withMean = True)
+  
+  final_cols = [c + '_enc' for c in cat_cols]
+  final_cols.append('scaled_features')
+  final_assembler = VectorAssembler(inputCols = final_cols, outputCol = 'features', handleInvalid = 'keep')
+
+  label_string_indexer = StringIndexer(inputCol = label_name, outputCol = 'label')
+
+  stages = [string_indexer, encoder, vector_num_assembler, scaler, final_assembler, label_string_indexer]
+  
+  return stages
+
+# COMMAND ----------
+
+# MAGIC %md ### Routines to evaluate our model performance
+# MAGIC 
+# MAGIC We train our models and evaluate performance throughout the pipeline
+
+# COMMAND ----------
+
+## This function will calculate evaluation metrics based on predictions
+def evaluation_metrics(predictions, model_name):
+  predictions = predictions.createOrReplaceTempView('predictions')
+  display(predictions)
+  true_positives = spark.sql("SELECT COUNT(*) FROM predictions WHERE predictions.label = 1 AND predictions.prediction = 1").collect()[0][0]
+  true_negatives = spark.sql("SELECT COUNT(*) FROM predictions WHERE predictions.label = 0 AND predictions.prediction = 0").collect()[0][0]
+  false_positives = spark.sql("SELECT COUNT(*) FROM predictions WHERE predictions.label = 0 AND predictions.prediction = 1").collect()[0][0]
+  false_negatives = spark.sql("SELECT COUNT(*) FROM predictions WHERE predictions.label = 1 AND predictions.prediction = 0").collect()[0][0]
+  
+  # Now we should compute our main statistics
+  accuracy = (true_positives + true_negatives)/(true_positives + true_negatives + false_positives + false_negatives)
+  recall = (true_positives) / (true_positives + false_negatives)
+  precision = (true_positives) / (true_positives + false_positives) if (true_positives + false_positives) != 0 else 0
+  f1_score = (2 * recall * precision) / (recall + precision) if (recall + precision) != 0 else 0
+
+  print("The accuracy is: %s" % np.round(accuracy, 4))
+  print("The recall is: %s" % np.round(recall, 4))
+  print("The precision is: %s" % np.round(precision, 4))
+  print("The f1_score is: %s" % np.round(f1_score, 4))
+  df_cols = ['Model','accuracy', 'precision', 'recall', 'f1_score', 'true_positives', 'true_negatives', 'false_positives', 'false_negatives']
+  metrics_dataframe = pd.DataFrame(columns = df_cols)
+  result_dict = {'Model': model_name,
+                 'accuracy': accuracy,
+                 'precision': precision, 
+                 'recall': recall, 
+                 'f1_score': f1_score, 
+                 'true_positives': true_positives, 
+                 'true_negatives': true_negatives, 
+                 'false_positives': false_positives, 
+                 'false_negatives': false_negatives}
+  metrics_dataframe = metrics_dataframe.append(result_dict, ignore_index=True)
+  
+  return metrics_dataframe
+
+def confusion_matrix(model_results,index):
+  confusion_matrix = pd.DataFrame(columns = ['_','Predicted Delay', 'Predicted No Delay'])
+  conf_matrix_delay = {'_': 'Actual Delay', 'Predicted Delay': model_results['true_positives'][index], 'Predicted No Delay': model_results['false_negatives'][index] }
+  conf_matrix_no_delay = {'_': 'Actual  No Delay', 'Predicted Delay': model_results['false_positives'][index], 'Predicted No Delay': model_results['true_negatives'][index] }
+  confusion_matrix = confusion_matrix.append(conf_matrix_delay,ignore_index=True)
+  confusion_matrix = confusion_matrix.append(conf_matrix_no_delay,ignore_index=True)
+  return confusion_matrix
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Model 1: Baseline Evaluation
+# MAGIC 
+# MAGIC Set up and run the pipeline for the baseline model
+
+# COMMAND ----------
+
+# create an encoding pipeline based on information from our training data
+encoding_pipeline = Pipeline(stages = create_encoding_stages(train_data,'DEP_DEL15')).fit(train_data)
+
+# apply the transformations to our train data
+transformed_train_data = encoding_pipeline.transform(train_data)['features', 'label']
+
+
+# train a model on our transformed train data
+startTime = time.time()
+lr = LogisticRegression(featuresCol = 'features', labelCol = 'label', maxIter = 30, regParam = 0.001)
+model = lr.fit(transformed_train_data)
+train_preds = model.transform(transformed_train_data)
+endTime = time.time()
+print(f"The training time of the Logistic Regression model is: {(endTime - startTime) / (60)} minutes")
+                             
+
+# COMMAND ----------
+
+train_metrics = evaluation_metrics(train_preds, "Logistic Regression on training data")
+display(train_metrics)
+
+# COMMAND ----------
+
+# MAGIC %md #### Evaluate against validation
+
+# COMMAND ----------
+
+# apply the encoding transformations from our pipeline to the validation data
+transformed_validation_data = encoding_pipeline.transform(validation_data)['features', 'label']
+
+# run the fitted model on the transformed validation data
+validation_preds = model.transform(transformed_validation_data)
+
+# COMMAND ----------
+
+# display our evaluation metrics
+validation_metrics = evaluation_metrics(validation_preds, "Logistic Regression on validation data")
+display(validation_metrics)
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+# MAGIC %md # Feature Selection and Engineering for next model
 
 # COMMAND ----------
 
@@ -1124,143 +1392,7 @@ display(joinedDf)
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC Now that our features are solidified, let's ensure that all the missing values are dealt with
 
-# COMMAND ----------
-
-# MAGIC %md # Missing Data
-
-# COMMAND ----------
-
-def replace_null_code_with_null(col_name, value):
-    missing_value_ref = {'WEATHER1_TMP_AIR_TEMP': 9999,
-                       'WEATHER1_VIS_VARIABILITY_CODE': '9',
-                       'WEATHER1_CIG_CEILING_HEIGHT_DIMENSION': 99999,
-                       'WEATHER1_DEW_POINT_TEMP': 9999,
-                       'WEATHER1_CIG_CEILING_DETERMINATION_CODE': '9',
-                       'WEATHER1_WND_DIRECTION_ANGLE': 999,
-                       'WEATHER1_WND_TYPE_CODE': '9',
-                       'WEATHER1_SLP_SEA_LEVEL_PRES': 99999,
-                       'WEATHER1_WND_SPEED_RATE': 9999,
-                       'WEATHER1_CIG_CAVOK_CODE': '9',
-                       'WEATHER1_VIS_DISTANCE_DIMENSION': 999999,
-                       'WEATHER2_TMP_AIR_TEMP': 9999,
-                       'WEATHER2_VIS_VARIABILITY_CODE': '9',
-                       'WEATHER2_CIG_CEILING_HEIGHT_DIMENSION': 99999,
-                       'WEATHER2_DEW_POINT_TEMP': 9999,
-                       'WEATHER2_CIG_CEILING_DETERMINATION_CODE': '9',
-                       'WEATHER2_WND_DIRECTION_ANGLE': 999,
-                       'WEATHER2_WND_TYPE_CODE': '9',
-                       'WEATHER2_SLP_SEA_LEVEL_PRES': 99999,
-                       'WEATHER2_WND_SPEED_RATE': 9999,
-                       'WEATHER2_CIG_CAVOK_CODE': '9',
-                       'WEATHER2_VIS_DISTANCE_DIMENSION': 999999}
-    if col_name in missing_value_ref.keys():
-        if value == missing_value_ref[col_name]:
-            return None
-
-    return value
-      
-replace_null_code_with_null = f.udf(replace_null_code_with_null)
-  
-
-# COMMAND ----------
-
-def correct_missing_codes(df):
-    missing_value_ref = {'WEATHER1_TMP_AIR_TEMP': 9999,
-                       'WEATHER1_CIG_CEILING_HEIGHT_DIMENSION': 99999,
-                       'WEATHER1_DEW_POINT_TEMP': 9999,
-                       'WEATHER1_WND_DIRECTION_ANGLE': 999,
-                       'WEATHER1_SLP_SEA_LEVEL_PRES': 99999,
-                       'WEATHER1_WND_SPEED_RATE': 9999,
-                       'WEATHER1_VIS_DISTANCE_DIMENSION': 999999,
-                       'WEATHER2_TMP_AIR_TEMP': 9999,
-                       'WEATHER2_CIG_CEILING_HEIGHT_DIMENSION': 99999,
-                       'WEATHER2_DEW_POINT_TEMP': 9999,
-                       'WEATHER2_WND_DIRECTION_ANGLE': 999,
-                       'WEATHER2_SLP_SEA_LEVEL_PRES': 99999,
-                       'WEATHER2_WND_SPEED_RATE': 9999,
-                       'WEATHER2_VIS_DISTANCE_DIMENSION': 999999}
-    
-    for col in missing_value_ref.keys():
-        df = df.withColumn(col, f.when(df[col] == missing_value_ref[col], f.lit(None)).otherwise(df[col]))
-    
-    return df
-
-def missingData(joinedDf):
-  missingCountList = []
-  for c in joinedDf.columns:
-      if joinedDf.where(f.col(c).isNull()).count() > 0:
-          tup = (c,int(joinedDf.where(f.col(c).isNull()).count()))
-          missingCountList.append(tup)
-
-  missingColumnList = [x[0] for x in missingCountList]
-  missingDf = joinedDf.select(missingColumnList)
-
-  missingCatColumns = [item[0] for item in missingDf.dtypes if item[1].startswith('string') and item != "YEAR"]  # string 
-  print("\nCategorical Columns with missing data:", missingCatColumns)
-
-  missingNumColumns = [item[0] for item in missingDf.dtypes if item[1].startswith('int') | item[1].startswith('double')] # will select name of column with integer or double data type
-  print("\nNumerical Columns with missing data:", missingNumColumns)
-  
-  # Fill the missing categorical values with the most frequent category 
-  for x in missingCatColumns:                  
-    mode = joinedDf.groupBy(x).count().sort(f.col("count").desc()).collect()
-    if mode:
-#       print(x, mode[0][0]) #print name of columns and it's most categories 
-      joinedDf = joinedDf.withColumn(x, f.when(joinedDf[x].isNull(), f.lit(mode)).otherwise(joinedDf[x]))
-      #joinedDf.na.fill({x:mode[0][0]})
-
-  # Fill the missing numerical values with the average of each #column
-  for i in missingNumColumns:
-    #meanvalue = joinedDf.select(f.round(f.mean(i))).collect()
-    meanvalue = joinedDf.select(f.mean(i).cast(IntegerType())).collect()
-    #print(meanvalue)
-    if meanvalue:
-#       print(i, meanvalue[0][0]) 
-        joinedDf = joinedDf.withColumn(i, f.when(joinedDf[i].isNull(), meanvalue[0][0]).otherwise(joinedDf[i]))
-  
-  return joinedDf
-
-# COMMAND ----------
-
-# MAGIC %md # Pipelining
-
-# COMMAND ----------
-
-# MAGIC %md First we should encode the data appropriately based on the data type
-
-# COMMAND ----------
-
-# MAGIC %md Next we must ensure that all the columns are the correct type
-
-# COMMAND ----------
-
-sample_of_combined_data = flights_and_weather_combined_processed.sample(0.0001, False)
-
-
-# COMMAND ----------
-
-print(flights_loc)
-
-# COMMAND ----------
-
-# set up a pipeline to apply all the stages of transformation
-cleanedData = clean_data(flights_and_weather_combined_processed.sample(0.0001, False)) # clean and cast our data to appropriate data types
-cleanedData.createOrReplaceTempView('cleanedData')
-cleanedData = spark.sql('SELECT * FROM cleanedData')
-
-cleanedData.write.option('mergeSchema', True).mode('overwrite').format('delta').save(f'/airline_delays/kevin/DLRS/flights_sampled/processed')
-# preTransformData = preTransformData.withColumn("")
-# selectedCols = ['features']+cols
-# cleaned_airlines_sample = cleaned_airlines_sample.select(selectedCols)
-# pd.DataFrame(cleaned_airlines_sample.take(5), columns=cleaned_airlines_sample.columns)
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC select COUNT(*) from cleanedData
 
 # COMMAND ----------
 
@@ -1268,186 +1400,7 @@ cleanedData.write.option('mergeSchema', True).mode('overwrite').format('delta').
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC 
-# MAGIC DROP TABLE IF EXISTS flights_and_weather_combined_processed_sampled;
-# MAGIC 
-# MAGIC CREATE TABLE flights_and_weather_combined_processed_sampled
-# MAGIC USING DELTA
-# MAGIC LOCATION "/airline_delays/kevin/DLRS/flights_sampled/processed"
 
-# COMMAND ----------
-
-# MAGIC %md Next we must account for the missing data
-
-# COMMAND ----------
-
-correctedMissingData = correct_missing_codes(spark.sql("SELECT * FROM flights_and_weather_combined_processed_sampled"))
-sampleMissingCleanedData = missingData(correctedMissingData)
-# missingCleanedData = missingData(correctedMissingData)
-# preTransformData = missingCleanedData
-
-# COMMAND ----------
-
-display(sampleMissingCleanedData)
-
-# COMMAND ----------
-
-# MAGIC %md ## Split data into train, validation, test
-
-# COMMAND ----------
-
-# transformedData = preTransformData.createOrReplaceTempView("transformedData")
-transformedData = sampleMissingCleanedData.createOrReplaceTempView("transformedData")
-trainData = spark.sql("SELECT * FROM transformedData WHERE YEAR IN (2015, 2016, 2017)")
-validateData = spark.sql("SELECT * FROM transformedData WHERE YEAR = 2018;")
-testData = spark.sql("SELECT * FROM transformedData WHERE YEAR = 2019;")
-
-trainData.createOrReplaceTempView('trainData')
-validateData.createOrReplaceTempView('validateData')
-testData.createOrReplaceTempView('testData')
-
-# COMMAND ----------
-
-# MAGIC %md ### Data Encoding
-
-# COMMAND ----------
-
-# Use the OneHotEncoderEstimator to convert categorical features into one-hot vectors
-# Use VectorAssembler to combine vector of one-hots and the numerical features
-# Append the process into the stages array to reproduce
-
-def encodeDataLR(catCols, numericCols):
-  
-  # One-Hot Encode Categorical Columns in the vector
-  stringIndexer = StringIndexer(inputCols=catCols, outputCols=[c + '_idx' for c in catCols], handleInvalid = 'skip') 
-  encoder = OneHotEncoder(inputCols= [c + '_idx' for c in catCols], outputCols = [c + '_enc' for c in catCols])
-
-  # Deal with Numeric Features
-  vectorNumAssembler = VectorAssembler(inputCols = numericCols, outputCol = 'unscaled_features', handleInvalid = 'skip')
-  scaler = StandardScaler(inputCol = 'unscaled_features', outputCol = 'scaled_features', withStd = True, withMean = True)
-  
-  finalCols = [c + '_enc' for c in catCols]
-  finalCols.append('scaled_features')
-  finalAssembler = VectorAssembler(inputCols = finalCols, outputCol = 'features', handleInvalid = 'skip')
-
-  labelStringIndexer = StringIndexer(inputCol = "DEP_DEL15", outputCol = 'label')
-
-  estimators = [stringIndexer, encoder, vectorNumAssembler, scaler, finalAssembler, labelStringIndexer]
-  
-  return estimators
-
-# COMMAND ----------
-
-catCols = [item[0] for item in sampleMissingCleanedData.dtypes if item[1].startswith('string')]
-numericCols = [item[0] for item in sampleMissingCleanedData.dtypes if item[1].startswith('int') | item[1].startswith('double')]
-estimators = encodeDataLR(catCols, numericCols) 
-estimators.append(LogisticRegression(maxIter = 10, regParam = 0.001))
-pipeline = Pipeline(stages = estimators)
-model = pipeline.fit(trainData)
-
-transformedData = model.transform(trainData)['features', 'label', 'rawPrediction', 'probability', 'prediction']
-transformedData.count()
-#transformedData.createOrReplaceTempView('transformedData')
-
-
-# COMMAND ----------
-
-display(transformedData)
-
-# COMMAND ----------
-
-evaluateMetrics(transformedData)
-
-# COMMAND ----------
-
-# Add only the columns that we will need for our model
-finalColumns = ['DEP_DEL15', 'label', 'features'] + columns
-trainData = trainData.select(finalColumns)
-validateData = validateData.select(finalColumns)
-testData = testData.select(finalColumns)
-
-# COMMAND ----------
-
-# MAGIC %md Add smaller sample for mini training and dev
-
-# COMMAND ----------
-
-miniTrainData = trainData.sampleBy('DEP_DEL15', fractions = {0: 0.05, 1: 0.05}, seed = 42)
-miniValidateData = validateData.sampleBy('DEP_DEL15', fractions = {0: 0.05, 1: 0.05}, seed = 42)
-
-# COMMAND ----------
-
-# MAGIC %md ## Evaluation Function
-
-# COMMAND ----------
-
-# This function will calculate evaluation metrics based on predictions
-metricsList = ['accuracy', 'precision', 'recall', 'f1Score', 'truePositives', 'trueNegatives', 'falsePositives', 'falseNegatives']
-metricsDataframe = pd.DataFrame(columns = metricsList)
-def evaluateMetrics(predictions):
-  predictions.createOrReplaceTempView('predictions')
-  truePositives = spark.sql("SELECT COUNT(*) FROM predictions WHERE label = 1 AND predictions = 1")
-  trueNegatives = spark.sql("SELECT COUNT(*) FROM predictions WHERE label = 0 AND predictions = 0")
-  falsePositives = spark.sql("SELECT COUNT(*) FROM predictions WHERE label = 0 AND predictions = 1")
-  trueNegatives = spark.sql("SELECT COUNT(*) FROM predictions WHERE label = 1 AND predictions = 0")
-  
-  # Now we should compute our main statistics
-  accuracy = (truePositives + trueNegatives)/(truePositives + trueNegatives + falsePositives + falseNegatives)
-  recall = (truePositives) / (truePositives + falseNegatives)
-  precision = (truePositives) / (truePositives + falsePositives) if (truePositives + falsePositives) != 0 else 0
-  f1Score = (2 * recall * precision) / (recall + precision) if (recall + precision) != 0 else 0
-  
-  print("The accuracy is: %s" % np.round(accuracy, 4))
-  print("The recall is: %s") % np.round(recall, 4)
-  print("The precision is: %s" % np.round(precision, 4))
-  print("The f1Score is: %s" % np.round(f1Score, 4))
-  metricsDataframe.loc['Logistic Regression Model'] = [accuracy, precision, recall, f1Score, truePositives, trueNegatives, falsePositives, falseNegatives]
-  truePositives = trueNegatives = falsePositives = falseNegatives = predictions = 0
-  
-def displayConfusionMatrix(modelResults):
-  confusionMatrix = pd.Dataframe(columns = ['Predicted Delay', 'Predicted No Delay'])
-  confusionMatrix.loc['Actual Delay', 'Predicted Delay'] = modelResults['truePositives']
-  confusionMatrix.loc['Actual No Delay', 'Predicted No Delay'] = modelResults['trueNegatives']
-  confusionMatrix.loc['Actual No Delay', 'Predicted Delay'] = modelResults['falsePositives']
-  confusionMatrix.loc['Actual Delay', 'Predicted No Delay'] = modelResults['falseNegatives']
-  
-
-# COMMAND ----------
-
-# MAGIC %md ### Run raw model and Evaluate Performance
-
-# COMMAND ----------
-
-modelLR = LogisticRegression(featuresCol = 'features', labelCol = 'label')
-startTime = time.time()
-modelLR = modelLR.fit(trainData)
-endTime = time.time()
-print("The training time of the model is: {(endTime - startTime) / (60)} minutes")
-
-# Next we will generate our predictions for the model
-predictions = modelLR.transform(validateData).cache()
-predictions.createOrReplaceTempView("predictions")
-
-# Call our evaluate performance function
-evaluatePerformance(predictions)
-
-# COMMAND ----------
-
-modelResults = pd.DataFrame(metricsDataFrame.loc['Logistic Regression Model'])
-modelResults.transpose()
-
-# COMMAND ----------
-
-# MAGIC %md Let's print a confusion matrix of our results 
-
-# COMMAND ----------
-
-displayConfusionMatrix(modelResults)
-
-# COMMAND ----------
-
-# MAGIC %md ### Repeat process for normalized model
 
 # COMMAND ----------
 
