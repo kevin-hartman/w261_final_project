@@ -25,10 +25,12 @@ import seaborn as sns
 from pytz import timezone 
 from datetime import  datetime, timedelta 
 import os
+from copy import deepcopy
 
 sqlContext = SQLContext(sc)
 
 from delta.tables import DeltaTable
+from pyspark.sql.window import Window
 
 # COMMAND ----------
 
@@ -54,21 +56,39 @@ spark.conf.set("spark.sql.shuffle.partitions", 8)
 # COMMAND ----------
 
 # MAGIC %md # Table of Contents
-# MAGIC ### 1. Introduction
+# MAGIC ### 1. Introduction/Question Formulation
 # MAGIC ### 2. Data Sources
-# MAGIC ### 3. Question Formulation
-# MAGIC ### 4. Data Lake Prep
-# MAGIC ### 5. EDA
-# MAGIC ### 6. Feature Engineering
-# MAGIC ### 7. Algorithm Exploration
-# MAGIC ### 8. Algorithm Implementation
-# MAGIC ### 9. Conclusion
-# MAGIC ### (10. Application of Course Concepts)
+# MAGIC ### 3. Data Lake Prep
+# MAGIC ### 4. Exploratory Data Analysis
+# MAGIC ### 5. Data Wrangling, Cleanup and Prep
+# MAGIC ### 6. Model Exploration (Pipeline)
+# MAGIC #### a. Feature Selection
+# MAGIC #### b. Feature Engineering
+# MAGIC #### c. Transformations (Encoding & Scaling)
+# MAGIC #### d. Evaluation
+# MAGIC ### 7. Model Selection and Tuning
+# MAGIC ### 8. Conclusion
+# MAGIC ### (9. Application of Course Concepts)
 
 # COMMAND ----------
 
 # MAGIC %md # 1. Introduction
-# MAGIC TBD
+# MAGIC 
+# MAGIC ## Objective
+# MAGIC Our goal is to understand flight delays given information about the flight, and surrounding weather information. Flight delays are common, however, then can be a result of various amount of factors. We want to identify what these features may be, and create a model that can accurately predict whether the flight will be delayed by atleast 15 minutes, or not. We attempt to use multiple models, as well as hyperparameter turning to get our final result.
+# MAGIC 
+# MAGIC ## Testing Approach 
+# MAGIC We decided to partition our dataset by years, where our training dataset consisted of data from 2015-2017, our validation data is from 2018, and our testing data is from 2019. The reason we split the data like this is because we don't want to to use future data to predict past data.  Furthermore, it is essential that all of the testing data is not sampled from any data that is in the future, for otherwise the model would not be practically useful.  
+# MAGIC 
+# MAGIC Note for the evaluation metric that is used, it appears that other literature on this topic have used the accuracy metric as the ideal metric to gauge model performance (Ye, 2020, Abdulwahab, 2020).  Therefore, our team has also decided to adopt accuracy as the de facto metric of comparison to determine which model is performing the best.  In addition, while it is important to minimize both the number of false positives and false negatives, our group has decided to prioritize minimizing the number of false positives, as we do not want to tell an individual that there is a delay when there actually is not a delay, as that could cause the individual to miss the flight which is the worst possible scenario.  Indeed, even if there a large number of false negatives, which implies that we tell the individual that there is a delay even though there is not a delay, then this outcome does not have as a negative impact on the user compared to them potentially missing their flight.  
+# MAGIC 
+# MAGIC ## Baseline Model
+# MAGIC For our baseline model, we decided to use a logistic regression model which just predicts on the binary variable of a delay greater than 15 minutes (DEP_DEL15).  This raw model was able to produce an accuracy score of 0.8154 on the validation data, but it unfortunately predicted a fairly large number of false positives, namely 4053.  This is large with respect to other baseline model of random forest, which produced a similar accuracy score of 0.8156.  However, it produced a much smaller number of false positives, namely 426.
+# MAGIC 
+# MAGIC Overall, in order to be practically useful, our model should have an accuracy score that exceeds 0.8 with a miniscule number of false positives.  If there are a large number of false positives, then the veracity of our model is incredibly questionable.  
+# MAGIC 
+# MAGIC ## Limitations
+# MAGIC Some of the limitations of our model include our model not predicting on different severities of delay.  From a user perspective, it is more beneficial have different levels of delay based on how long their will be a delay.  By only predicting whether there is a delay or not, it is difficult for the individual to truly manage their schedule to accomodate for the flight delay.  This distinction between different magnitudes of delay will especially have prominent impacts on airports that have a lot of traffic.  
 
 # COMMAND ----------
 
@@ -235,28 +255,13 @@ airports_raw_df = spark.read.format("delta").load(airports_loc + "raw")
 
 # COMMAND ----------
 
-flights_raw_df = spark.read.format("delta").load(flights_loc + "raw")
-
-# COMMAND ----------
-
-flights_raw_df.count()
-
-# COMMAND ----------
-
-airports_raw_df = spark.read.format("delta").load(airports_loc + "raw")
-
-# COMMAND ----------
-
 # MAGIC %md ## Perform data processing for analysis (Silver)
 # MAGIC #### Clear processed staging folders
 
 # COMMAND ----------
 
-dbutils.fs.rm(flights_loc + "processed", recurse=True)
-
-# COMMAND ----------
-
-dbutils.fs.rm(weather_loc + "processed", recurse=True)
+#dbutils.fs.rm(weather_loc + "processed", recurse=True)
+#weather_raw_df = spark.read.format("delta").load(weather_loc + "raw")
 
 # COMMAND ----------
 
@@ -266,6 +271,11 @@ dbutils.fs.rm(flights_6m_loc + "processed", recurse=True)
 dbutils.fs.rm(airports_loc + "processed", recurse=True)
 dbutils.fs.rm(weather_loc + "processed", recurse=True)
 dbutils.fs.rm(stations_loc + "processed", recurse=True)
+
+# COMMAND ----------
+
+# We'll distribute flight data across 80 partitions -- TODO: REVIEW THIS
+spark.conf.set("spark.sql.shuffle.partitions", 80)
 
 # COMMAND ----------
 
@@ -280,33 +290,23 @@ def process_flight_data(df):
   return (
     df
     .withColumn('IN_FLIGHT_AIR_DELAY', f.lit(df['ARR_DELAY'] - df['DEP_DELAY'] )) # this column is the time difference between arrival and departure and does not include total flight delay
-#    .withColumn("time", from_unixtime("time"))
-#    .withColumnRenamed("device_id", "p_device_id")
-#    .withColumn("time", col("time").cast("timestamp"))
-#    .withColumn("dte", col("time").cast("date"))
-#    .withColumn("p_device_id", col("p_device_id").cast("integer"))
-#    .select("dte", "time", "heartrate", "name", "p_device_id")
     .select(cols)
     )
 
 flights_processed_df = process_flight_data(flights_raw_df)
-#flights_3m_processed_df = process_flight_data(flights_3m_raw_df)
-#flights_6m_processed_df = process_flight_data(flights_6m_raw_df)
-
-# COMMAND ----------
-
-flights_processed_df.count()
+flights_3m_processed_df = process_flight_data(flights_3m_raw_df)
+flights_6m_processed_df = process_flight_data(flights_6m_raw_df)
 
 # COMMAND ----------
 
 (flights_3m_processed_df.write
  .mode("overwrite")
  .format("parquet")
- .partitionBy("DAY_OF_MONTH")
+ .partitionBy("FL_DATE")
  .save(flights_3m_loc + "processed"))
 
 parquet_table = f"parquet.`{flights_3m_loc}processed`"
-partitioning_scheme = "DAY_OF_MONTH string"
+partitioning_scheme = "FL_DATE string"
 
 DeltaTable.convertToDelta(spark, parquet_table, partitioning_scheme)
 
@@ -325,11 +325,11 @@ DeltaTable.convertToDelta(spark, parquet_table, partitioning_scheme)
 (flights_6m_processed_df.write
  .mode("overwrite")
  .format("parquet")
- .partitionBy("DAY_OF_MONTH")
+ .partitionBy("FL_DATE")
  .save(flights_6m_loc + "processed"))
 
 parquet_table = f"parquet.`{flights_6m_loc}processed`"
-partitioning_scheme = "DAY_OF_MONTH string"
+partitioning_scheme = "FL_DATE string"
 
 DeltaTable.convertToDelta(spark, parquet_table, partitioning_scheme)
 
@@ -348,11 +348,11 @@ DeltaTable.convertToDelta(spark, parquet_table, partitioning_scheme)
 (flights_processed_df.write
  .mode("overwrite")
  .format("parquet")
- .partitionBy("DAY_OF_MONTH")
+ .partitionBy("FL_DATE")
  .save(flights_loc + "processed"))
 
 parquet_table = f"parquet.`{flights_loc}processed`"
-partitioning_scheme = "DAY_OF_MONTH string"
+partitioning_scheme = "FL_DATE string"
 
 DeltaTable.convertToDelta(spark, parquet_table, partitioning_scheme)
 
@@ -374,69 +374,42 @@ DeltaTable.convertToDelta(spark, parquet_table, partitioning_scheme)
 
 # COMMAND ----------
 
+# We'll distribute weather data across 80 partitions
+spark.conf.set("spark.sql.shuffle.partitions", 80)
+
+# COMMAND ----------
+
 def process_weather_data(df):
-  WND_col = f.split(df['WND'], ',')
-  CIG_col = f.split(df['CIG'], ',')
-  VIS_col = f.split(df['VIS'], ',')
-  TMP_col = f.split(df['TMP'], ',')
-  DEW_col = f.split(df['DEW'], ',')
-  SLP_col = f.split(df['SLP'], ',')
   df = (df
-    .withColumn("STATION", f.lpad(df.STATION, 11, '0'))
-    # WND Fields [direction angle, quality code, type code, speed rate, speed quality code]
-    .withColumn('WND_DIRECTION_ANGLE', WND_col.getItem(0).cast('int')) # continuous
-    .withColumn('WND_QUALITY_CODE', WND_col.getItem(1).cast('int')) # categorical
-    .withColumn('WND_TYPE_CODE', WND_col.getItem(2).cast('string')) # categorical
-    .withColumn('WND_SPEED_RATE', WND_col.getItem(3).cast('int')) # categorical
-    .withColumn('WND_SPEED_QUALITY_CODE', WND_col.getItem(4).cast('int')) # categorical
-    # CIG Fields
-    .withColumn('CIG_CEILING_HEIGHT_DIMENSION', CIG_col.getItem(0).cast('int')) # continuous 
-    .withColumn('CIG_CEILING_QUALITY_CODE', CIG_col.getItem(1).cast('int')) # categorical
-    .withColumn('CIG_CEILING_DETERMINATION_CODE', CIG_col.getItem(2).cast('string')) # categorical 
-    .withColumn('CIG_CAVOK_CODE', CIG_col.getItem(3).cast('string')) # categorical/binary
-    # VIS Fields
-    .withColumn('VIS_DISTANCE_DIMENSION', VIS_col.getItem(0).cast('int')) # continuous
-    .withColumn('VIS_DISTANCE_QUALITY_CODE', VIS_col.getItem(1).cast('int')) # categorical
-    .withColumn('VIS_VARIABILITY_CODE', VIS_col.getItem(2).cast('string')) # categorical/binary
-    .withColumn('VIS_QUALITY_VARIABILITY_CODE', VIS_col.getItem(3).cast('int')) # categorical
-    # TMP Fields
-    .withColumn('TMP_AIR_TEMP', TMP_col.getItem(0).cast('int')) # continuous
-    .withColumn('TMP_AIR_TEMP_QUALITY_CODE', TMP_col.getItem(1).cast('string')) # categorical
-    # DEW Fields
-    .withColumn('DEW_POINT_TEMP', DEW_col.getItem(0).cast('int')) # continuous
-    .withColumn('DEW_POINT_QUALITY_CODE', DEW_col.getItem(1).cast('string')) # categorical
-    # SLP Fields
-    .withColumn('SLP_SEA_LEVEL_PRES', SLP_col.getItem(0).cast('int')) # continuous
-    .withColumn('SLP_SEA_LEVEL_PRES_QUALITY_CODE', SLP_col.getItem(1).cast('int')) # categorical
-    # SNOW Fields
-    
-    .withColumnRenamed("DATE", "WEATHER_DATE")
-    .withColumnRenamed("SOURCE", "WEATHER_SOURCE")
-    .withColumnRenamed("STATION", "WEATHER_STATION")
+        .withColumn("WEATHER_DATE", f.to_date('DATE').cast('string'))
+        .withColumn("STATION", f.lpad(df.STATION, 11, '0').cast('string'))
+        .withColumnRenamed("DATE", "WEATHER_TIMESTAMP")
+        .withColumnRenamed("SOURCE", "WEATHER_SOURCE")
+        .withColumnRenamed("STATION", "WEATHER_STATION")
+        .withColumnRenamed("LATITUDE", "WEATHER_LAT")
+        .withColumnRenamed("LONGITUDE", "WEATHER_LON")
+        .withColumnRenamed("ELEVATION", "WEATHER_ELEV")
+        .withColumnRenamed("NAME", "WEATHER_NAME")
+        .withColumnRenamed("REPORT_TYPE", "WEATHER_REPORT_TYPE")
+        .withColumnRenamed("CALL_SIGN", "WEATHER_CALL_SIGN")
        )
 
-
-  cols = set(df.columns)
-  remove_cols = set(['LATITUDE', 'LONGITUDE', 'ELEVATION', 'NAME', 'REPORT_TYPE', 'CALL_SIGN', 'WND', 'CIG','VIS','TMP', 'DEW', 'SLP'])
-  cols = list(cols - remove_cols)
-  df = df.select(cols)
-  for col in df.columns:
-    df = df.withColumnRenamed(col,f'WEATHER1_{col}')
   return df
-  
 
 weather_processed_df = process_weather_data(weather_raw_df)
+
+
 
 # COMMAND ----------
 
 (weather_processed_df.write
  .mode("overwrite")
  .format("parquet")
- .partitionBy("WEATHER1_WND_DIRECTION_ANGLE")
+ .partitionBy("WEATHER_DATE")
  .save(weather_loc + "processed"))
 
 parquet_table = f"parquet.`{weather_loc}processed`"
-partitioning_scheme = "WEATHER1_WND_DIRECTION_ANGLE string"
+partitioning_scheme = "WEATHER_DATE string"
 
 DeltaTable.convertToDelta(spark, parquet_table, partitioning_scheme)
 
@@ -454,6 +427,11 @@ DeltaTable.convertToDelta(spark, parquet_table, partitioning_scheme)
 
 # MAGIC %md 
 # MAGIC ### Station data pre-processing
+
+# COMMAND ----------
+
+# We'll distribute station and airport data back to the normal 8 partitions
+spark.conf.set("spark.sql.shuffle.partitions", 8)
 
 # COMMAND ----------
 
@@ -543,14 +521,17 @@ DeltaTable.convertToDelta(spark, parquet_table, partitioning_scheme)
 
 # COMMAND ----------
 
+flights_processed = spark.read.format('delta').load(f'{flights_loc}processed')
+weather_processed = spark.read.format('delta').load(f'{weather_loc}processed')
+stations_processed = spark.read.format('delta').load(f'{stations_loc}processed')
+airports_processed = spark.read.format('delta').load(f'{airports_loc}processed')
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Flights EDA
 # MAGIC 
 # MAGIC Schema for flights: https://annettegreiner.com/vizcomm/OnTime_readme.html
-
-# COMMAND ----------
-
-flights_processed = spark.read.table("flights_processed")
 
 # COMMAND ----------
 
@@ -562,10 +543,20 @@ f'{flights_processed.count():,}'
 
 # COMMAND ----------
 
-# we can filter out the first three months ourselves
+# MAGIC %md
+# MAGIC **We will perform EDA on a sample distribution from the first three  years**
+# MAGIC 
+# MAGIC Note, we initially ran these routines on the first three months of data for the project exploration. After this early look, and the decision to use the first three years of data for training, we moved to perform our EDA review again on a random sample from this distribution.
+
+# COMMAND ----------
+
+# we will perform EDA on a random sample taken from the first three years
 #flights_sample = flights_processed.where('(ORIGIN = "ORD" OR ORIGIN = "ATL") AND QUARTER = 1 and YEAR = 2015').sample(False, .10, seed = 42)
-# Or the code below results in the equivalent
-flights_sample = flights_3m_processed.sample(False, .10, seed = 42)
+flights_sample = flights_processed.where('YEAR IN (2015, 2016, 2017)').sample(False, .01, seed = 42)
+
+# COMMAND ----------
+
+f'{flights_sample.count()}'
 
 # COMMAND ----------
 
@@ -573,20 +564,78 @@ display(flights_sample)
 
 # COMMAND ----------
 
-flights_sample.count()
+# MAGIC %md
+# MAGIC **Review our sample for missing info**
 
 # COMMAND ----------
 
-flights_sample.dtypes
+# review missing info
+def info_missing_table(df_pd):
+    """Input pandas dataframe and Return columns with missing value and percentage"""
+    mis_val = df_pd.isnull().sum() #count total of null in each columns in dataframe
+#count percentage of null in each columns
+    mis_val_percent = 100 * df_pd.isnull().sum() / len(df_pd) 
+    mis_val_table = pd.concat([mis_val, mis_val_percent], axis=1) 
+ #join to left (as column) between mis_val and mis_val_percent
+    mis_val_table_ren_columns = mis_val_table.rename(
+    columns = {0 : 'Missing Values', 1 : '% of Total Values'}) 
+#rename columns in table
+    mis_val_table_ren_columns = mis_val_table_ren_columns[
+    mis_val_table_ren_columns.iloc[:,1] != 0].sort_values('% of Total Values', ascending=False).round(1) 
+        
+    print ("DataFrame has " + str(df_pd.shape[1]) + " columns.\n"    #.shape[1] : just view total columns in dataframe  
+    "There are " + str(mis_val_table_ren_columns.shape[0]) +              
+    " columns that have missing values.") #.shape[0] : just view total rows in dataframe
+    return mis_val_table_ren_columns
 
 # COMMAND ----------
 
-def get_dtype(df,colname):
-    return [dtype for name, dtype in df.dtypes if name == colname][0]
+flights_sample_panda_df = flights_sample.toPandas()
+
+missing_recs = info_missing_table(flights_sample_panda_df)
+missing_recs
 
 # COMMAND ----------
 
-get_dtype(flights_sample, 'ORIGIN')
+missing_recs[missing_recs['% of Total Values'] > 95]
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC **As a first pass will drop all columns that have more than 99% missing information as these records will be impossible to impute**
+
+# COMMAND ----------
+
+cols_to_drop = missing_recs[missing_recs['% of Total Values'] > 99].index.values
+cols_to_drop
+
+# COMMAND ----------
+
+cols_to_drop = ['DIV4_AIRPORT', 'DIV4_TOTAL_GTIME', 'DIV3_TOTAL_GTIME',
+       'DIV3_WHEELS_ON', 'DIV3_AIRPORT_SEQ_ID', 'DIV3_AIRPORT_ID',
+       'DIV3_AIRPORT', 'DIV3_TAIL_NUM', 'DIV3_WHEELS_OFF',
+       'DIV4_AIRPORT_ID', 'DIV4_AIRPORT_SEQ_ID', 'DIV4_WHEELS_ON',
+       'DIV3_LONGEST_GTIME', 'DIV4_LONGEST_GTIME', 'DIV5_TAIL_NUM',
+       'DIV4_TAIL_NUM', 'DIV5_AIRPORT', 'DIV5_WHEELS_OFF',
+       'DIV5_LONGEST_GTIME', 'DIV5_TOTAL_GTIME', 'DIV5_WHEELS_ON',
+       'DIV5_AIRPORT_SEQ_ID', 'DIV5_AIRPORT_ID', 'DIV4_WHEELS_OFF',
+       'DIV2_TAIL_NUM', 'DIV2_WHEELS_OFF', 'DIV2_WHEELS_ON',
+       'DIV2_AIRPORT', 'DIV2_TOTAL_GTIME', 'DIV2_LONGEST_GTIME',
+       'DIV2_AIRPORT_SEQ_ID', 'DIV2_AIRPORT_ID', 'DIV_ARR_DELAY',
+       'DIV_ACTUAL_ELAPSED_TIME', 'DIV1_TAIL_NUM', 'DIV1_WHEELS_OFF',
+       'DIV_DISTANCE', 'DIV_REACHED_DEST', 'DIV1_AIRPORT_SEQ_ID',
+       'DIV1_TOTAL_GTIME', 'DIV1_WHEELS_ON', 'DIV1_AIRPORT_ID',
+       'DIV1_AIRPORT', 'DIV1_LONGEST_GTIME', 'LONGEST_ADD_GTIME',
+       'TOTAL_ADD_GTIME', 'FIRST_DEP_TIME']
+
+# COMMAND ----------
+
+cols = flights_sample_panda_df.columns
+cols_to_keep = []
+remove_cols = set(cols_to_drop)
+for col in cols:
+  if not col in remove_cols:
+    cols_to_keep.append(col)
 
 # COMMAND ----------
 
@@ -605,7 +654,7 @@ class Analyze:
         #sns.set(rc={'figure.figsize':(10*2,16*8)})
         sns.set()
         i=0
-        fig, ax = plt.subplots(nrows=round(len(self.df.columns)), ncols=2, figsize=(16,3*round(len(self.df.columns))))
+        fig, ax = plt.subplots(nrows=round(len(self.df.columns)), ncols=2, figsize=(16,6*round(len(self.df.columns))))
         all_cols=[]
         for col in self.df.columns:
             if self.df[col].dtype.name == 'object'  or self.df[col].dtype.name == 'category': 
@@ -677,26 +726,28 @@ class Analyze:
 
 # COMMAND ----------
 
-# analyzer = Analyze(flights_sample)
-# analyzer.print_eda_summary()
+# MAGIC %md
+# MAGIC **Now we will analyze the remaining columns for their distribution of values, descriptive statistics and potential for explanatory power**
 
 # COMMAND ----------
 
-
+df_to_analyze = deepcopy(flights_sample_panda_df[cols_to_keep])
+analyzer = Analyze(df_to_analyze)
+analyzer.print_eda_summary()
 
 # COMMAND ----------
 
 sns.set(rc={'figure.figsize':(100,100)})
-sns.heatmap(flights_sample.toPandas().corr(), cmap='RdBu_r', annot=True, center=0.0)
+sns.heatmap(flights_sample_panda_df[cols_to_keep].corr(), cmap='RdBu_r', annot=True, center=0.0)
 sns.set(rc={'figure.figsize':(10,10)})
 
 # COMMAND ----------
 
-flights_sample.where('DEP_DELAY < 0').count() / flights_sample.count() # This statistic explains that 47% of flights depart earlier
+flights_sample.where('DEP_DELAY < 0').count() / flights_sample.count() # This statistic explains that 58% of flights depart earlier
 
 # COMMAND ----------
 
-flights_sample.where('DEP_DELAY == 0').count() / flights_sample.count()  # This statistic explains that 6.9% of flights depart EXACTLY on time
+flights_sample.where('DEP_DELAY == 0').count() / flights_sample.count()  # This statistic explains that 5.3% of flights depart EXACTLY on time
 
 # COMMAND ----------
 
@@ -709,7 +760,7 @@ plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
 
-bins, counts = flights_df_sample.select('DEP_DELAY').where('DEP_DELAY <= 0 AND DEP_DELAY > -25').rdd.flatMap(lambda x: x).histogram(50)
+bins, counts = flights_sample.select('DEP_DELAY').where('DEP_DELAY <= 0 AND DEP_DELAY > -25').rdd.flatMap(lambda x: x).histogram(50)
 plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
@@ -723,7 +774,7 @@ plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
 
-bins, counts = flights_df_sample.select('DEP_DELAY').where('DEP_DELAY > 0 AND DEP_DELAY < 300').rdd.flatMap(lambda x: x).histogram(50)
+bins, counts = flights_sample.select('DEP_DELAY').where('DEP_DELAY > 0 AND DEP_DELAY < 300').rdd.flatMap(lambda x: x).histogram(50)
 plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
@@ -737,7 +788,7 @@ plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
 
-# MAGIC %md ### Next, we will look into visualizing arrival delay.  However, we should note that arrival delay also encompasses any delay from the departure delay.  Therefore, we must first ensure that we create a new column that accounts for this discrepancy.
+# MAGIC %md ### Next, we will look into visualizing arrival delay.  However, we should note that arrival delay also encompasses any delay from the departure delay.  Therefore, we engineered a new column in our pre-processor (IN_FLIGHT_AIR_DELAY) that accounts for this discrepancy.
 
 # COMMAND ----------
 
@@ -762,16 +813,88 @@ f'{weather_processed.count():,}'
 
 # COMMAND ----------
 
-weather_processed.printSchema()
-
-# COMMAND ----------
-
-display(weather_processed)
-
-# COMMAND ----------
-
+# sample from the first three years
+weather_sample = weather_processed.where('WEATHER_DATE >= TO_DATE("01/01/2015", "MM/dd/yyyy") AND WEATHER_DATE <= TO_DATE("12/31/2017", "MM/dd/yyyy")').sample(False, .001, seed = 42)
 # subset to 1Q2015
-weather_subset = weather_processed.where('WEATHER_DATE >= TO_DATE("01/01/2015", "MM/dd/yyyy") AND WEATHER_DATE <= TO_DATE("03/31/2015", "MM/dd/yyyy")') 
+#weather_subset = weather_processed.where('WEATHER_DATE >= TO_DATE("01/01/2015", "MM/dd/yyyy") AND WEATHER_DATE <= TO_DATE("03/31/2015", "MM/dd/yyyy")') 
+
+# COMMAND ----------
+
+f'{weather_sample.count():,}'
+
+# COMMAND ----------
+
+weather_sample.printSchema()
+
+# COMMAND ----------
+
+display(weather_sample)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Review columns with missing data
+
+# COMMAND ----------
+
+weather_sample_panda_df = weather_sample.toPandas()
+
+missing_recs = info_missing_table(weather_sample_panda_df)
+missing_recs
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC The weather data has encoded fields that we must parse out before we can perform our EDA. We will decode a few of these fields and flatten them out so we may review.
+
+# COMMAND ----------
+
+def decode_weather_fields(df):
+  WND_col = f.split(df['WND'], ',')
+  CIG_col = f.split(df['CIG'], ',')
+  VIS_col = f.split(df['VIS'], ',')
+  TMP_col = f.split(df['TMP'], ',')
+  DEW_col = f.split(df['DEW'], ',')
+  SLP_col = f.split(df['SLP'], ',')
+  df = (df
+    # WND Fields [direction angle, quality code, type code, speed rate, speed quality code]
+    .withColumn('WND_DIRECTION_ANGLE', WND_col.getItem(0).cast('int')) # continuous
+    .withColumn('WND_QUALITY_CODE', WND_col.getItem(1).cast('int')) # categorical
+    .withColumn('WND_TYPE_CODE', WND_col.getItem(2).cast('string')) # categorical
+    .withColumn('WND_SPEED_RATE', WND_col.getItem(3).cast('int')) # categorical
+    .withColumn('WND_SPEED_QUALITY_CODE', WND_col.getItem(4).cast('int')) # categorical
+    # CIG Fields
+    .withColumn('CIG_CEILING_HEIGHT_DIMENSION', CIG_col.getItem(0).cast('int')) # continuous 
+    .withColumn('CIG_CEILING_QUALITY_CODE', CIG_col.getItem(1).cast('int')) # categorical
+    .withColumn('CIG_CEILING_DETERMINATION_CODE', CIG_col.getItem(2).cast('string')) # categorical 
+    .withColumn('CIG_CAVOK_CODE', CIG_col.getItem(3).cast('string')) # categorical/binary
+    # VIS Fields
+    .withColumn('VIS_DISTANCE_DIMENSION', VIS_col.getItem(0).cast('int')) # continuous
+    .withColumn('VIS_DISTANCE_QUALITY_CODE', VIS_col.getItem(1).cast('int')) # categorical
+    .withColumn('VIS_VARIABILITY_CODE', VIS_col.getItem(2).cast('string')) # categorical/binary
+    .withColumn('VIS_QUALITY_VARIABILITY_CODE', VIS_col.getItem(3).cast('int')) # categorical
+    # TMP Fields
+    .withColumn('TMP_AIR_TEMP', TMP_col.getItem(0).cast('int')) # continuous
+    .withColumn('TMP_AIR_TEMP_QUALITY_CODE', TMP_col.getItem(1).cast('string')) # categorical
+    # DEW Fields
+    .withColumn('DEW_POINT_TEMP', DEW_col.getItem(0).cast('int')) # continuous
+    .withColumn('DEW_POINT_QUALITY_CODE', DEW_col.getItem(1).cast('string')) # categorical
+    # SLP Fields
+    .withColumn('SLP_SEA_LEVEL_PRES', SLP_col.getItem(0).cast('int')) # continuous
+    .withColumn('SLP_SEA_LEVEL_PRES_QUALITY_CODE', SLP_col.getItem(1).cast('int')) # categorical
+    # SNOW Fields
+    
+       )
+
+  return df
+
+# COMMAND ----------
+
+decoded_weather_sample = decode_weather_fields(weather_sample)
+
+# COMMAND ----------
+
+display(decoded_weather_sample)
 
 # COMMAND ----------
 
@@ -780,31 +903,31 @@ weather_subset = weather_processed.where('WEATHER_DATE >= TO_DATE("01/01/2015", 
 # COMMAND ----------
 
 # create histogram of wind speed. Filtered to remove nulls and values higher than the world record of 253 mph (113 m/s)
-bins, counts = weather_subset.where('WND_Speed_Rate <= 113').select('WND_Speed_Rate').rdd.flatMap(lambda x: x).histogram(20)
+bins, counts = decoded_weather_sample.where('WND_Speed_Rate <= 113').select('WND_Speed_Rate').rdd.flatMap(lambda x: x).histogram(20)
 plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
 
 # create histogram of VIS distance code
-bins, counts = weather_subset.where('VIS_Distance_Dimension < 999999').select('VIS_Distance_Dimension').rdd.flatMap(lambda x: x).histogram(20)
+bins, counts = decoded_weather_sample.where('VIS_Distance_Dimension < 999999').select('VIS_Distance_Dimension').rdd.flatMap(lambda x: x).histogram(20)
 plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
 
 # create histogram of SLP level code
-bins, counts = weather_subset.where('SLP_Sea_Level_Pres < 99999').select('SLP_Sea_Level_Pres').rdd.flatMap(lambda x: x).histogram(20)
+bins, counts = decoded_weather_sample.where('SLP_Sea_Level_Pres < 99999').select('SLP_Sea_Level_Pres').rdd.flatMap(lambda x: x).histogram(20)
 plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
 
 # create histogram of DEW field code
-bins, counts = weather_subset.where('DEW_Point_Temp < 9999').select('DEW_Point_Temp').rdd.flatMap(lambda x: x).histogram(20)
+bins, counts = decoded_weather_sample.where('DEW_Point_Temp < 9999').select('DEW_Point_Temp').rdd.flatMap(lambda x: x).histogram(20)
 plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
 
 # create histogram of Air Temp code
-bins, counts = weather_subset.where('TMP_Air_Temp < 9999').select('TMP_Air_Temp').rdd.flatMap(lambda x: x).histogram(20)
+bins, counts = decoded_weather_sample.where('TMP_Air_Temp < 9999').select('TMP_Air_Temp').rdd.flatMap(lambda x: x).histogram(20)
 plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
@@ -859,18 +982,21 @@ plt.hist(bins[:-1], bins=bins, weights=counts)
 
 # COMMAND ----------
 
-weather_processed = spark.read.table("weather_processed")
-
-# COMMAND ----------
-
 #create set of distinct ids from weather data
-weather_distinct_ids = weather_processed.select('WEATHER1_WEATHER_STATION').distinct()
+weather_distinct_ids = weather_processed.select('WEATHER_STATION').distinct()
 
 #join distinct ids to stations tables and subset for matches
 valid_stations = weather_distinct_ids.join(stations_processed,\
-                                           weather_distinct_ids.WEATHER1_WEATHER_STATION == stations_processed.STATION_USAF_WBAN,\
+                                           weather_distinct_ids.WEATHER_STATION == stations_processed.STATION_USAF_WBAN,\
                                            'left').where('STATION_USAF_WBAN IS NOT NULL')
 
+
+# COMMAND ----------
+
+# MAGIC %md 
+# MAGIC * Query the flights to get the minimum and maximum date. 
+# MAGIC   * Per next two cells, flight data covers 1/1/2015-12/31/2019
+# MAGIC * Query the stations to look at the start and end date to verify they are all active for the reporting period we are concerned with.
 
 # COMMAND ----------
 
@@ -880,13 +1006,6 @@ valid_stations = weather_distinct_ids.join(stations_processed,\
 # MAGIC GROUP BY FL_DATE
 # MAGIC ORDER BY FL_DATE DESC
 # MAGIC LIMIT 3;
-
-# COMMAND ----------
-
-# MAGIC %md 
-# MAGIC * Query the flights to get the minimum and maximum date. 
-# MAGIC   * Per next two cells, flight data covers 1/1/2015-12/31/2019
-# MAGIC * Query the stations to look at the start and end date to verify they are all active for the reporting period we are concerned with.
 
 # COMMAND ----------
 
@@ -1065,10 +1184,6 @@ display(airports_stations_dest)
 
 # COMMAND ----------
 
-flights_processed = spark.read.format('delta').load(f'{flights_loc}processed')
-
-# COMMAND ----------
-
 # MAGIC %sql
 # MAGIC SELECT *
 # MAGIC FROM flights_processed
@@ -1119,7 +1234,8 @@ joined_flights_stations_tz.write.option('mergeSchema', True).mode('overwrite').f
 
 # COMMAND ----------
 
-flights_processed = spark.read.table("flights_processed")
+# Ensure we are always using the most recent version of the data in the delta lake
+flights_processed = spark.read.format('delta').load(f'{flights_loc}processed')
 
 # COMMAND ----------
 
@@ -1231,6 +1347,11 @@ flights_processed.write.option('mergeSchema', True).mode('overwrite').format('de
 
 # COMMAND ----------
 
+# Ensure we are always using the most recent version of the data in the delta lake
+flights_processed = spark.read.format('delta').load(f'{flights_loc}processed')
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC Honolulu is missing a lot of weather data so we will replace its weather key with that of Hilo
 # MAGIC Station ID 99999921515
@@ -1265,23 +1386,28 @@ spark.udf.register("fix_HNL_weather_key", fix_HNL_weather_key)
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC SELECT COUNT(*)
-# MAGIC FROM flights_processed
-
-# COMMAND ----------
-
-# MAGIC %sql
 # MAGIC UPDATE flights_processed
 # MAGIC SET nearest_station_id_ORIGIN = replace_HNL_weather_station_id(nearest_station_id_ORIGIN), ORIGIN_WEATHER_KEY = fix_HNL_weather_key(ORIGIN_WEATHER_KEY)
 # MAGIC WHERE ORIGIN = "HNL"
 
 # COMMAND ----------
 
-flights_processed = spark.read.table("flights_processed")
+# MAGIC %sql
+# MAGIC SELECT * FROM flights_processed
+# MAGIC WHERE ORIGIN = "HNL"
 
 # COMMAND ----------
 
-display(flights_processed)
+# MAGIC %sql
+# MAGIC UPDATE flights_processed
+# MAGIC SET nearest_station_id_DEST = replace_HNL_weather_station_id(nearest_station_id_DEST), DEST_WEATHER_KEY = fix_HNL_weather_key(DEST_WEATHER_KEY)
+# MAGIC WHERE DEST = "HNL"
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT * FROM flights_processed
+# MAGIC WHERE DEST = "HNL"
 
 # COMMAND ----------
 
@@ -1289,22 +1415,42 @@ flights_processed.write.option('mergeSchema', True).mode('overwrite').format('de
 
 # COMMAND ----------
 
+# Ensure we are always using the most recent version of the data in the delta lake
+flights_processed = spark.read.format('delta').load(f'{flights_loc}processed')
+
+# COMMAND ----------
+
 # MAGIC %md ### Create Composite Keys in Weather Data
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC First define a UDF
-
-# COMMAND ----------
-
-weather_processed = spark.read.table("weather_processed")
+# Ensure we are always using the most recent version of the data in the delta lake
+weather_processed = spark.read.format('delta').load(f'{weather_loc}processed')
 
 # COMMAND ----------
 
 # MAGIC %sql 
-# MAGIC SELECT * FROM weather_processed
-# MAGIC LIMIT 1
+# MAGIC SELECT COUNT(*)
+# MAGIC FROM weather_processed
+# MAGIC WHERE WEATHER_STATION IS NULL
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Remove weather data with no station ID and store it back onto the delta lake (we won't use these records and saving it back now will reduce our time for future queries)
+
+# COMMAND ----------
+
+weather_processed.where("WEATHER_STATION IS NOT NULL").write.option('mergeSchema', True).mode('overwrite').format('delta').save(f'{weather_loc}processed')
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Now we will define a UDF to create our composite weather key
+
+# COMMAND ----------
+
+weather_processed.printSchema()
 
 # COMMAND ----------
 
@@ -1322,23 +1468,20 @@ spark.udf.register("create_composite_weather_key", create_composite_weather_key)
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC Remove weather data with no station ID and land in Delta Lake
-
-# COMMAND ----------
-
-weather_processed.where("WEATHER1_WEATHER_STATION IS NOT NULL").write.option('mergeSchema', True).mode('overwrite').format('delta').save(f'{weather_loc}processed')
+# MAGIC %sql
+# MAGIC SELECT create_composite_weather_key(WEATHER_TIMESTAMP, WEATHER_STATION)
+# MAGIC FROM weather_processed;
 
 # COMMAND ----------
 
 # MAGIC %sql
 # MAGIC SELECT *
 # MAGIC FROM weather_processed
-# MAGIC WHERE create_composite_weather_key(WEATHER1_WEATHER_DATE, WEATHER1_WEATHER_STATION) IS NULL;
+# MAGIC WHERE create_composite_weather_key(WEATHER_TIMESTAMP, WEATHER_STATION) IS NULL;
 
 # COMMAND ----------
 
-weather_processed = spark.sql("SELECT *, create_composite_weather_key(WEATHER1_WEATHER_DATE, WEATHER1_WEATHER_STATION) AS WEATHER1_WEATHER_KEY FROM weather_processed;")
+weather_processed = spark.sql("SELECT *, create_composite_weather_key(WEATHER_TIMESTAMP, WEATHER_STATION) AS WEATHER_KEY FROM weather_processed;")
 
 # COMMAND ----------
 
@@ -1367,81 +1510,35 @@ weather_processed.write.option('mergeSchema', True).mode('overwrite').format('de
 
 # COMMAND ----------
 
-weather_processed = spark.read.table("weather_processed")
+# MAGIC %md
+# MAGIC Weather data has multiple readings within the hour. We want just the first reading. So we'll clean our weather set again.
 
 # COMMAND ----------
 
-flights_processed.count()
+# Ensure we are always using the most recent version of the data in the delta lake
+weather_processed = spark.read.format('delta').load(f'{weather_loc}processed')
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC SELECT * 
-# MAGIC FROM flights_processed
-# MAGIC LEFT JOIN weather_processed
-# MAGIC ON flights_processed.ORIGIN_WEATHER_KEY=weather_processed.WEATHER_KEY
-# MAGIC LIMIT 10;
+weather_processed.count()
 
 # COMMAND ----------
 
-# join the origin weather
-flights_processed = spark.sql("SELECT * FROM flights_processed LEFT SEMI JOIN weather_processed ON flights_processed.ORIGIN_WEATHER_KEY=weather_processed.WEATHER1_WEATHER_KEY;")
+w = Window.partitionBy("WEATHER_KEY").orderBy("WEATHER_TIMESTAMP")
+
+weather_processed = weather_processed.withColumn("row_number", f.row_number().over(w)).filter(f.col("row_number") == 1).drop("row_number")
 
 # COMMAND ----------
 
-# save results of first join to Delta Lake
-flights_processed.write.option('mergeSchema', True).mode('overwrite').format('delta').save(f'{flights_loc}processed')
+weather_processed.write.option('mergeSchema', True).mode('overwrite').format('delta').save(f'{weather_loc}processed')
 
 # COMMAND ----------
 
-flights_processed_test = spark.sql("SELECT * FROM flights_processed_rolled_back SEMI JOIN weather_processed ON flights_processed.ORIGIN_WEATHER_KEY = weather_processed.WEATHER1_WEATHER_KEY")
+weather_processed = spark.read.format('delta').load(f'{weather_loc}processed')
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC SELECT * FROM (
-# MAGIC     SELECT w.*, 
-# MAGIC     ROW_NUMBER() OVER (ORDER BY WEATHER1_WEATHER_KEY DESC) rn 
-# MAGIC     FROM weather_processed w
-# MAGIC )
-# MAGIC WHERE rn = 1
-
-# COMMAND ----------
-
-flights_and_weather_processed = spark.sql("SELECT * FROM flights_processed VERSION AS OF 3 fp JOIN ( \
-                                                          SELECT * FROM (\
-                                                                SELECT *, ROW_NUMBER() OVER ( \
-                                                                      partition by WEATHER1_WEATHER_KEY \
-                                                                      ORDER BY WEATHER1_WEATHER_DATE ASC \
-                                                                ) as row_num \
-                                                                FROM weather_processed \
-                                                            ) as ordered_weather \
-                                                            WHERE ordered_weather.row_num = 1 \
-                                                        ) as w1 \
-                                                        ON fp.ORIGIN_WEATHER_KEY = w1.WEATHER1_WEATHER_KEY")
-
-# COMMAND ----------
-
-
-
-# COMMAND ----------
-
-weather_processed_first_records_only = spark.sql("SELECT most_recent_weather.* FROM weather_processed JOIN ( \
-                                                          SELECT * FROM (\
-                                                                SELECT ROW_NUMBER() OVER ( \
-                                                                      partition by WEATHER1_WEATHER_KEY \
-                                                                      ORDER BY WEATHER1_WEATHER_DATE ASC \
-                                                                ) as row_num \
-                                                                FROM weather_processed \
-                                                            ) as ordered_weather \
-                                                            WHERE ordered_weather.row_num = 1 \
-                                                        ) as most_recent_weather \
-                                                        ON weather_processed.WEATHER1_WEATHER_KEY = most_recent_weather.WEATHER1_WEATHER_KEY")
-
-# COMMAND ----------
-
-# save results to the weather  Delta Lake
-weather_processed_first_records_only.write.option('mergeSchema', True).mode('overwrite').format('delta').save(f'{weather_loc}processed')
+weather_processed.count()
 
 # COMMAND ----------
 
@@ -1449,437 +1546,63 @@ flights_and_weather_loc = f"/airline_delays/{username}/DLRS/flights_and_weather/
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC CREATE TABLE flights_and_weather_processed
-# MAGIC USING DELTA
-# MAGIC LOCATION '/airline_delays/kevin/DLRS/flights_and_weather'
-# MAGIC AS SELECT *
-# MAGIC FROM
-# MAGIC   flights_processed AS OF VERSION 3 fp
-# MAGIC   LEFT JOIN weather_processed w1 ON fp.ORIGIN_WEATHER_KEY = w1.WEATHER1_WEATHER_KEY
-# MAGIC   LEFT JOIN (
-# MAGIC     SELECT
-# MAGIC       w.WEATHER1_GN1 AS WEATHER2_GN1,
-# MAGIC       w.WEATHER1_GF1 AS WEATHER2_GF1,
-# MAGIC       w.WEATHER1_UA1 AS WEATHER2_UA1,
-# MAGIC       w.WEATHER1_AU2 AS WEATHER2_AU2,
-# MAGIC       w.WEATHER1_AX5 AS WEATHER2_AX5,
-# MAGIC       w.WEATHER1_TMP_AIR_TEMP AS WEATHER2_TMP_AIR_TEMP,
-# MAGIC       w.WEATHER1_MK1 AS WEATHER2_MK1,
-# MAGIC       w.WEATHER1_CN3 AS WEATHER2_CN3,
-# MAGIC       w.WEATHER1_GM1 AS WEATHER2_GM1,
-# MAGIC       w.WEATHER1_GA2 AS WEATHER2_GA2,
-# MAGIC       w.WEATHER1_SLP_SEA_LEVEL_PRES_QUALITY_CODE AS WEATHER2_SLP_SEA_LEVEL_PRES_QUALITY_CODE,
-# MAGIC       w.WEATHER1_AW7 AS WEATHER2_AW7,
-# MAGIC       w.WEATHER1_MG1 AS WEATHER2_MG1,
-# MAGIC       w.WEATHER1_CG3 AS WEATHER2_CG3,
-# MAGIC       w.WEATHER1_VIS_VARIABILITY_CODE AS WEATHER2_VIS_VARIABILITY_CODE,
-# MAGIC       w.WEATHER1_GO1 AS WEATHER2_GO1,
-# MAGIC       w.WEATHER1_AL3 AS WEATHER2_AL3,
-# MAGIC       w.WEATHER1_AI1 AS WEATHER2_AI1,
-# MAGIC       w.WEATHER1_MF1 AS WEATHER2_MF1,
-# MAGIC       w.WEATHER1_WEATHER_KEY AS WEATHER2_WEATHER_KEY,
-# MAGIC       w.WEATHER1_KA3 AS WEATHER2_KA3,
-# MAGIC       w.WEATHER1_AI4 AS WEATHER2_AI4,
-# MAGIC       w.WEATHER1_AK1 AS WEATHER2_AK1,
-# MAGIC       w.WEATHER1_OE3 AS WEATHER2_OE3,
-# MAGIC       w.WEATHER1_AW2 AS WEATHER2_AW2,
-# MAGIC       w.WEATHER1_REM AS WEATHER2_REM,
-# MAGIC       w.WEATHER1_OD2 AS WEATHER2_OD2,
-# MAGIC       w.WEATHER1_CN4 AS WEATHER2_CN4,
-# MAGIC       w.WEATHER1_AO1 AS WEATHER2_AO1,
-# MAGIC       w.WEATHER1_CO1 AS WEATHER2_CO1,
-# MAGIC       w.WEATHER1_OE2 AS WEATHER2_OE2,
-# MAGIC       w.WEATHER1_CG1 AS WEATHER2_CG1,
-# MAGIC       w.WEATHER1_AX6 AS WEATHER2_AX6,
-# MAGIC       w.WEATHER1_KA2 AS WEATHER2_KA2,
-# MAGIC       w.WEATHER1_CU2 AS WEATHER2_CU2,
-# MAGIC       w.WEATHER1_AH3 AS WEATHER2_AH3,
-# MAGIC       w.WEATHER1_OE1 AS WEATHER2_OE1,
-# MAGIC       w.WEATHER1_MA1 AS WEATHER2_MA1,
-# MAGIC       w.WEATHER1_CT1 AS WEATHER2_CT1,
-# MAGIC       w.WEATHER1_AW4 AS WEATHER2_AW4,
-# MAGIC       w.WEATHER1_AU3 AS WEATHER2_AU3,
-# MAGIC       w.WEATHER1_GA5 AS WEATHER2_GA5,
-# MAGIC       w.WEATHER1_UG1 AS WEATHER2_UG1,
-# MAGIC       w.WEATHER1_GE1 AS WEATHER2_GE1,
-# MAGIC       w.WEATHER1_AI3 AS WEATHER2_AI3,
-# MAGIC       w.WEATHER1_GD1 AS WEATHER2_GD1,
-# MAGIC       w.WEATHER1_CIG_CEILING_QUALITY_CODE AS WEATHER2_CIG_CEILING_QUALITY_CODE,
-# MAGIC       w.WEATHER1_AX3 AS WEATHER2_AX3,
-# MAGIC       w.WEATHER1_KD1 AS WEATHER2_KD1,
-# MAGIC       w.WEATHER1_CIG_CEILING_HEIGHT_DIMENSION AS WEATHER2_CIG_CEILING_HEIGHT_DIMENSION,
-# MAGIC       w.WEATHER1_AW3 AS WEATHER2_AW3,
-# MAGIC       w.WEATHER1_CV1 AS WEATHER2_CV1,
-# MAGIC       w.WEATHER1_AY1 AS WEATHER2_AY1,
-# MAGIC       w.WEATHER1_MV1 AS WEATHER2_MV1,
-# MAGIC       w.WEATHER1_KA4 AS WEATHER2_KA4,
-# MAGIC       w.WEATHER1_AJ1 AS WEATHER2_AJ1,
-# MAGIC       w.WEATHER1_WEATHER_DATE AS WEATHER2_WEATHER_DATE,
-# MAGIC       w.WEATHER1_CG2 AS WEATHER2_CG2,
-# MAGIC       w.WEATHER1_KD2 AS WEATHER2_KD2,
-# MAGIC       w.WEATHER1_DEW_POINT_TEMP AS WEATHER2_DEW_POINT_TEMP,
-# MAGIC       w.WEATHER1_AH1 AS WEATHER2_AH1,
-# MAGIC       w.WEATHER1_AU1 AS WEATHER2_AU1,
-# MAGIC       w.WEATHER1_GL1 AS WEATHER2_GL1,
-# MAGIC       w.WEATHER1_MW5 AS WEATHER2_MW5,
-# MAGIC       w.WEATHER1_AU4 AS WEATHER2_AU4,
-# MAGIC       w.WEATHER1_AT4 AS WEATHER2_AT4,
-# MAGIC       w.WEATHER1_CN2 AS WEATHER2_CN2,
-# MAGIC       w.WEATHER1_CV3 AS WEATHER2_CV3,
-# MAGIC       w.WEATHER1_MW2 AS WEATHER2_MW2,
-# MAGIC       w.WEATHER1_AT7 AS WEATHER2_AT7,
-# MAGIC       w.WEATHER1_ED1 AS WEATHER2_ED1,
-# MAGIC       w.WEATHER1_CU3 AS WEATHER2_CU3,
-# MAGIC       w.WEATHER1_UG2 AS WEATHER2_UG2,
-# MAGIC       w.WEATHER1_WD1 AS WEATHER2_WD1,
-# MAGIC       w.WEATHER1_RH3 AS WEATHER2_RH3,
-# MAGIC       w.WEATHER1_AT5 AS WEATHER2_AT5,
-# MAGIC       w.WEATHER1_MW1 AS WEATHER2_MW1,
-# MAGIC       w.WEATHER1_GK1 AS WEATHER2_GK1,
-# MAGIC       w.WEATHER1_CU1 AS WEATHER2_CU1,
-# MAGIC       w.WEATHER1_AA3 AS WEATHER2_AA3,
-# MAGIC       w.WEATHER1_AM1 AS WEATHER2_AM1,
-# MAGIC       w.WEATHER1_OD3 AS WEATHER2_OD3,
-# MAGIC       w.WEATHER1_GA1 AS WEATHER2_GA1,
-# MAGIC       w.WEATHER1_AT2 AS WEATHER2_AT2,
-# MAGIC       w.WEATHER1_AI6 AS WEATHER2_AI6,
-# MAGIC       w.WEATHER1_AT8 AS WEATHER2_AT8,
-# MAGIC       w.WEATHER1_RH1 AS WEATHER2_RH1,
-# MAGIC       w.WEATHER1_MW4 AS WEATHER2_MW4,
-# MAGIC       w.WEATHER1_AA1 AS WEATHER2_AA1,
-# MAGIC       w.WEATHER1_AN1 AS WEATHER2_AN1,
-# MAGIC       w.WEATHER1_AH6 AS WEATHER2_AH6,
-# MAGIC       w.WEATHER1_CF3 AS WEATHER2_CF3,
-# MAGIC       w.WEATHER1_CF1 AS WEATHER2_CF1,
-# MAGIC       w.WEATHER1_CIG_CEILING_DETERMINATION_CODE AS WEATHER2_CIG_CEILING_DETERMINATION_CODE,
-# MAGIC       w.WEATHER1_AI2 AS WEATHER2_AI2,
-# MAGIC       w.WEATHER1_CN1 AS WEATHER2_CN1,
-# MAGIC       w.WEATHER1_CT3 AS WEATHER2_CT3,
-# MAGIC       w.WEATHER1_GG4 AS WEATHER2_GG4,
-# MAGIC       w.WEATHER1_CB1 AS WEATHER2_CB1,
-# MAGIC       w.WEATHER1_GD2 AS WEATHER2_GD2,
-# MAGIC       w.WEATHER1_GA4 AS WEATHER2_GA4,
-# MAGIC       w.WEATHER1_KA1 AS WEATHER2_KA1,
-# MAGIC       w.WEATHER1_AD1 AS WEATHER2_AD1,
-# MAGIC       w.WEATHER1_WA1 AS WEATHER2_WA1,
-# MAGIC       w.WEATHER1_AW1 AS WEATHER2_AW1,
-# MAGIC       w.WEATHER1_MH1 AS WEATHER2_MH1,
-# MAGIC       w.WEATHER1_KB2 AS WEATHER2_KB2,
-# MAGIC       w.WEATHER1_KG1 AS WEATHER2_KG1,
-# MAGIC       w.WEATHER1_AA2 AS WEATHER2_AA2,
-# MAGIC       w.WEATHER1_GG2 AS WEATHER2_GG2,
-# MAGIC       w.WEATHER1_KC1 AS WEATHER2_KC1,
-# MAGIC       w.WEATHER1_OC1 AS WEATHER2_OC1,
-# MAGIC       w.WEATHER1_IA1 AS WEATHER2_IA1,
-# MAGIC       w.WEATHER1_AW5 AS WEATHER2_AW5,
-# MAGIC       w.WEATHER1_WND_DIRECTION_ANGLE AS WEATHER2_WND_DIRECTION_ANGLE,
-# MAGIC       w.WEATHER1_IA2 AS WEATHER2_IA2,
-# MAGIC       w.WEATHER1_GJ1 AS WEATHER2_GJ1,
-# MAGIC       w.WEATHER1_GA3 AS WEATHER2_GA3,
-# MAGIC       w.WEATHER1_GD5 AS WEATHER2_GD5,
-# MAGIC       w.WEATHER1_CR1 AS WEATHER2_CR1,
-# MAGIC       w.WEATHER1_CF2 AS WEATHER2_CF2,
-# MAGIC       w.WEATHER1_DEW_POINT_QUALITY_CODE AS WEATHER2_DEW_POINT_QUALITY_CODE,
-# MAGIC       w.WEATHER1_AT1 AS WEATHER2_AT1,
-# MAGIC       w.WEATHER1_KB1 AS WEATHER2_KB1,
-# MAGIC       w.WEATHER1_GD3 AS WEATHER2_GD3,
-# MAGIC       w.WEATHER1_KC2 AS WEATHER2_KC2,
-# MAGIC       w.WEATHER1_CV2 AS WEATHER2_CV2,
-# MAGIC       w.WEATHER1_AL2 AS WEATHER2_AL2,
-# MAGIC       w.WEATHER1_AH5 AS WEATHER2_AH5,
-# MAGIC       w.WEATHER1_KG2 AS WEATHER2_KG2,
-# MAGIC       w.WEATHER1_ME1 AS WEATHER2_ME1,
-# MAGIC       w.WEATHER1_AE1 AS WEATHER2_AE1,
-# MAGIC       w.WEATHER1_AW6 AS WEATHER2_AW6,
-# MAGIC       w.WEATHER1_AX1 AS WEATHER2_AX1,
-# MAGIC       w.WEATHER1_KE1 AS WEATHER2_KE1,
-# MAGIC       w.WEATHER1_SA1 AS WEATHER2_SA1,
-# MAGIC       w.WEATHER1_OB1 AS WEATHER2_OB1,
-# MAGIC       w.WEATHER1_AZ1 AS WEATHER2_AZ1,
-# MAGIC       w.WEATHER1_MD1 AS WEATHER2_MD1,
-# MAGIC       w.WEATHER1_AA4 AS WEATHER2_AA4,
-# MAGIC       w.WEATHER1_MV2 AS WEATHER2_MV2,
-# MAGIC       w.WEATHER1_WND_TYPE_CODE AS WEATHER2_WND_TYPE_CODE,
-# MAGIC       w.WEATHER1_TMP_AIR_TEMP_QUALITY_CODE AS WEATHER2_TMP_AIR_TEMP_QUALITY_CODE,
-# MAGIC       w.WEATHER1_GD4 AS WEATHER2_GD4,
-# MAGIC       w.WEATHER1_AL1 AS WEATHER2_AL1,
-# MAGIC       w.WEATHER1_GA6 AS WEATHER2_GA6,
-# MAGIC       w.WEATHER1_OD1 AS WEATHER2_OD1,
-# MAGIC       w.WEATHER1_AB1 AS WEATHER2_AB1,
-# MAGIC       w.WEATHER1_CW1 AS WEATHER2_CW1,
-# MAGIC       w.WEATHER1_AH4 AS WEATHER2_AH4,
-# MAGIC       w.WEATHER1_SLP_SEA_LEVEL_PRES AS WEATHER2_SLP_SEA_LEVEL_PRES,
-# MAGIC       w.WEATHER1_AX2 AS WEATHER2_AX2,
-# MAGIC       w.WEATHER1_IB2 AS WEATHER2_IB2,
-# MAGIC       w.WEATHER1_IB1 AS WEATHER2_IB1,
-# MAGIC       w.WEATHER1_AX4 AS WEATHER2_AX4,
-# MAGIC       w.WEATHER1_WND_SPEED_RATE AS WEATHER2_WND_SPEED_RATE,
-# MAGIC       w.WEATHER1_AT6 AS WEATHER2_AT6,
-# MAGIC       w.WEATHER1_KB3 AS WEATHER2_KB3,
-# MAGIC       w.WEATHER1_MW6 AS WEATHER2_MW6,
-# MAGIC       w.WEATHER1_AH2 AS WEATHER2_AH2,
-# MAGIC       w.WEATHER1_GG1 AS WEATHER2_GG1,
-# MAGIC       w.WEATHER1_AZ2 AS WEATHER2_AZ2,
-# MAGIC       w.WEATHER1_QUALITY_CONTROL AS WEATHER2_QUALITY_CONTROL,
-# MAGIC       w.WEATHER1_AY2 AS WEATHER2_AY2,
-# MAGIC       w.WEATHER1_CH1 AS WEATHER2_CH1,
-# MAGIC       w.WEATHER1_AU5 AS WEATHER2_AU5,
-# MAGIC       w.WEATHER1_HL1 AS WEATHER2_HL1,
-# MAGIC       w.WEATHER1_CIG_CAVOK_CODE AS WEATHER2_CIG_CAVOK_CODE,
-# MAGIC       w.WEATHER1_VIS_DISTANCE_DIMENSION AS WEATHER2_VIS_DISTANCE_DIMENSION,
-# MAGIC       w.WEATHER1_GH1 AS WEATHER2_GH1,
-# MAGIC       w.WEATHER1_WEATHER_STATION AS WEATHER2_WEATHER_STATION,
-# MAGIC       w.WEATHER1_AI5 AS WEATHER2_AI5,
-# MAGIC       w.WEATHER1_GG3 AS WEATHER2_GG3,
-# MAGIC       w.WEATHER1_AT3 AS WEATHER2_AT3,
-# MAGIC       w.WEATHER1_MW3 AS WEATHER2_MW3,
-# MAGIC       w.WEATHER1_CT2 AS WEATHER2_CT2,
-# MAGIC       w.WEATHER1_KF1 AS WEATHER2_KF1,
-# MAGIC       w.WEATHER1_RH2 AS WEATHER2_RH2,
-# MAGIC       w.WEATHER1_EQD AS WEATHER2_EQD,
-# MAGIC       w.WEATHER1_CI1 AS WEATHER2_CI1,
-# MAGIC       w.WEATHER1_VIS_DISTANCE_QUALITY_CODE AS WEATHER2_VIS_DISTANCE_QUALITY_CODE,
-# MAGIC       w.WEATHER1_VIS_QUALITY_VARIABILITY_CODE AS WEATHER2_VIS_QUALITY_VARIABILITY_CODE,
-# MAGIC       w.WEATHER1_WEATHER_SOURCE AS WEATHER2_WEATHER_SOURCE,
-# MAGIC       w.WEATHER1_WND_QUALITY_CODE AS WEATHER2_WND_QUALITY_CODE,
-# MAGIC       w.WEATHER1_WND_SPEED_QUALITY_CODE AS WEATHER2_WND_SPEED_QUALITY_CODE
-# MAGIC     FROM
-# MAGIC       weather_processed w
-# MAGIC   ) w2 ON fp.ORIGIN_WEATHER_KEY = w2.WEATHER2_WEATHER_KEY
+flights_processed = spark.read.format('delta').load(f'{flights_loc}processed')
+origin = spark.read.format('delta').load(f'{weather_loc}processed')
+dest = spark.read.format('delta').load(f'{weather_loc}processed')
+
+#origin_cols = []
+for col in origin.columns:
+  if col != 'WEATHER_KEY':
+    #origin_cols.append("ORIGIN_" + col)
+    origin = origin.withColumnRenamed(col,f'ORIGIN_{col}')
+    
+#dest_cols = []
+for col in dest.columns:
+  if col != 'WEATHER_KEY':
+    #dest_cols.append("DEST" + col)
+    dest = dest.withColumnRenamed(col,f'DEST_{col}')
+
+# COMMAND ----------
+
+fp_joined = flights_processed.join(origin, origin.WEATHER_KEY == fp_sample.ORIGIN_WEATHER_KEY).drop("WEATHER_KEY")\
+                             .join(dest, dest.WEATHER_KEY == fp_sample.DEST_WEATHER_KEY).drop("WEATHER_KEY")\
+                             .select("*")
+
+# COMMAND ----------
+
+dbutils.fs.rm(flights_and_weather_loc + "processed", recurse=True)
+
+# COMMAND ----------
+
+# We'll distribute flight data across 80 partitions -- TODO: REVIEW THIS
+spark.conf.set("spark.sql.shuffle.partitions", 80)
+
+# COMMAND ----------
+
+(fp_joined.write
+ .mode("overwrite")
+ .format("parquet")
+ .partitionBy("FL_DATE")
+ .save(flights_and_weather_loc + "processed"))
+
+parquet_table = f"parquet.`{flights_and_weather_loc}processed`"
+partitioning_scheme = "FL_DATE string"
+
+DeltaTable.convertToDelta(spark, parquet_table, partitioning_scheme)
 
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC CREATE TABLE flights_and_weather_processed
+# MAGIC 
+# MAGIC DROP TABLE IF EXISTS flights_and_weather;
+# MAGIC 
+# MAGIC CREATE TABLE flights_and_weather
 # MAGIC USING DELTA
-# MAGIC LOCATION '/airline_delays/kevin/DLRS/flights_and_weather'
-# MAGIC AS SELECT * FROM flights_processed VERSION AS OF 3 fp JOIN ( 
-# MAGIC                                                           SELECT * FROM (
-# MAGIC                                                                 SELECT *, ROW_NUMBER() OVER ( 
-# MAGIC                                                                       partition by WEATHER1_WEATHER_KEY 
-# MAGIC                                                                       ORDER BY WEATHER1_WEATHER_DATE ASC 
-# MAGIC                                                                 ) as w1_row_num 
-# MAGIC                                                                 FROM weather_processed 
-# MAGIC                                                             ) as ordered_weather 
-# MAGIC                                                             WHERE ordered_weather.w1_row_num = 1 
-# MAGIC                                                         ) as w1 
-# MAGIC                                                         ON fp.ORIGIN_WEATHER_KEY = w1.WEATHER1_WEATHER_KEY
-# MAGIC                                                       JOIN (
-# MAGIC                                                         SELECT  w.WEATHER1_GN1 AS WEATHER2_GN1,
-# MAGIC                                                                 w.WEATHER1_GF1 AS WEATHER2_GF1,
-# MAGIC                                                                 w.WEATHER1_UA1 AS WEATHER2_UA1,
-# MAGIC                                                                 w.WEATHER1_AU2 AS WEATHER2_AU2,
-# MAGIC                                                                 w.WEATHER1_AX5 AS WEATHER2_AX5,
-# MAGIC                                                                 w.WEATHER1_TMP_AIR_TEMP AS WEATHER2_TMP_AIR_TEMP,
-# MAGIC                                                                 w.WEATHER1_MK1 AS WEATHER2_MK1,
-# MAGIC                                                                 w.WEATHER1_CN3 AS WEATHER2_CN3,
-# MAGIC                                                                 w.WEATHER1_GM1 AS WEATHER2_GM1,
-# MAGIC                                                                 w.WEATHER1_GA2 AS WEATHER2_GA2,
-# MAGIC                                                                 w.WEATHER1_SLP_SEA_LEVEL_PRES_QUALITY_CODE AS WEATHER2_SLP_SEA_LEVEL_PRES_QUALITY_CODE,
-# MAGIC                                                                 w.WEATHER1_AW7 AS WEATHER2_AW7,
-# MAGIC                                                                 w.WEATHER1_MG1 AS WEATHER2_MG1,
-# MAGIC                                                                 w.WEATHER1_CG3 AS WEATHER2_CG3,
-# MAGIC                                                                 w.WEATHER1_VIS_VARIABILITY_CODE AS WEATHER2_VIS_VARIABILITY_CODE,
-# MAGIC                                                                 w.WEATHER1_GO1 AS WEATHER2_GO1,
-# MAGIC                                                                 w.WEATHER1_AL3 AS WEATHER2_AL3,
-# MAGIC                                                                 w.WEATHER1_AI1 AS WEATHER2_AI1,
-# MAGIC                                                                 w.WEATHER1_MF1 AS WEATHER2_MF1,
-# MAGIC                                                                 w.WEATHER1_WEATHER_KEY AS WEATHER2_WEATHER_KEY,
-# MAGIC                                                                 w.WEATHER1_KA3 AS WEATHER2_KA3,
-# MAGIC                                                                 w.WEATHER1_AI4 AS WEATHER2_AI4,
-# MAGIC                                                                 w.WEATHER1_AK1 AS WEATHER2_AK1,
-# MAGIC                                                                 w.WEATHER1_OE3 AS WEATHER2_OE3,
-# MAGIC                                                                 w.WEATHER1_AW2 AS WEATHER2_AW2,
-# MAGIC                                                                 w.WEATHER1_REM AS WEATHER2_REM,
-# MAGIC                                                                 w.WEATHER1_OD2 AS WEATHER2_OD2,
-# MAGIC                                                                 w.WEATHER1_CN4 AS WEATHER2_CN4,
-# MAGIC                                                                 w.WEATHER1_AO1 AS WEATHER2_AO1,
-# MAGIC                                                                 w.WEATHER1_CO1 AS WEATHER2_CO1,
-# MAGIC                                                                 w.WEATHER1_OE2 AS WEATHER2_OE2,
-# MAGIC                                                                 w.WEATHER1_CG1 AS WEATHER2_CG1,
-# MAGIC                                                                 w.WEATHER1_AX6 AS WEATHER2_AX6,
-# MAGIC                                                                 w.WEATHER1_KA2 AS WEATHER2_KA2,
-# MAGIC                                                                 w.WEATHER1_CU2 AS WEATHER2_CU2,
-# MAGIC                                                                 w.WEATHER1_AH3 AS WEATHER2_AH3,
-# MAGIC                                                                 w.WEATHER1_OE1 AS WEATHER2_OE1,
-# MAGIC                                                                 w.WEATHER1_MA1 AS WEATHER2_MA1,
-# MAGIC                                                                 w.WEATHER1_CT1 AS WEATHER2_CT1,
-# MAGIC                                                                 w.WEATHER1_AW4 AS WEATHER2_AW4,
-# MAGIC                                                                 w.WEATHER1_AU3 AS WEATHER2_AU3,
-# MAGIC                                                                 w.WEATHER1_GA5 AS WEATHER2_GA5,
-# MAGIC                                                                 w.WEATHER1_UG1 AS WEATHER2_UG1,
-# MAGIC                                                                 w.WEATHER1_GE1 AS WEATHER2_GE1,
-# MAGIC                                                                 w.WEATHER1_AI3 AS WEATHER2_AI3,
-# MAGIC                                                                 w.WEATHER1_GD1 AS WEATHER2_GD1,
-# MAGIC                                                                 w.WEATHER1_CIG_CEILING_QUALITY_CODE AS WEATHER2_CIG_CEILING_QUALITY_CODE,
-# MAGIC                                                                 w.WEATHER1_AX3 AS WEATHER2_AX3,
-# MAGIC                                                                 w.WEATHER1_KD1 AS WEATHER2_KD1,
-# MAGIC                                                                 w.WEATHER1_CIG_CEILING_HEIGHT_DIMENSION AS WEATHER2_CIG_CEILING_HEIGHT_DIMENSION,
-# MAGIC                                                                 w.WEATHER1_AW3 AS WEATHER2_AW3,
-# MAGIC                                                                 w.WEATHER1_CV1 AS WEATHER2_CV1,
-# MAGIC                                                                 w.WEATHER1_AY1 AS WEATHER2_AY1,
-# MAGIC                                                                 w.WEATHER1_MV1 AS WEATHER2_MV1,
-# MAGIC                                                                 w.WEATHER1_KA4 AS WEATHER2_KA4,
-# MAGIC                                                                 w.WEATHER1_AJ1 AS WEATHER2_AJ1,
-# MAGIC                                                                 w.WEATHER1_WEATHER_DATE AS WEATHER2_WEATHER_DATE,
-# MAGIC                                                                 w.WEATHER1_CG2 AS WEATHER2_CG2,
-# MAGIC                                                                 w.WEATHER1_KD2 AS WEATHER2_KD2,
-# MAGIC                                                                 w.WEATHER1_DEW_POINT_TEMP AS WEATHER2_DEW_POINT_TEMP,
-# MAGIC                                                                 w.WEATHER1_AH1 AS WEATHER2_AH1,
-# MAGIC                                                                 w.WEATHER1_AU1 AS WEATHER2_AU1,
-# MAGIC                                                                 w.WEATHER1_GL1 AS WEATHER2_GL1,
-# MAGIC                                                                 w.WEATHER1_MW5 AS WEATHER2_MW5,
-# MAGIC                                                                 w.WEATHER1_AU4 AS WEATHER2_AU4,
-# MAGIC                                                                 w.WEATHER1_AT4 AS WEATHER2_AT4,
-# MAGIC                                                                 w.WEATHER1_CN2 AS WEATHER2_CN2,
-# MAGIC                                                                 w.WEATHER1_CV3 AS WEATHER2_CV3,
-# MAGIC                                                                 w.WEATHER1_MW2 AS WEATHER2_MW2,
-# MAGIC                                                                 w.WEATHER1_AT7 AS WEATHER2_AT7,
-# MAGIC                                                                 w.WEATHER1_ED1 AS WEATHER2_ED1,
-# MAGIC                                                                 w.WEATHER1_CU3 AS WEATHER2_CU3,
-# MAGIC                                                                 w.WEATHER1_UG2 AS WEATHER2_UG2,
-# MAGIC                                                                 w.WEATHER1_WD1 AS WEATHER2_WD1,
-# MAGIC                                                                 w.WEATHER1_RH3 AS WEATHER2_RH3,
-# MAGIC                                                                 w.WEATHER1_AT5 AS WEATHER2_AT5,
-# MAGIC                                                                 w.WEATHER1_MW1 AS WEATHER2_MW1,
-# MAGIC                                                                 w.WEATHER1_GK1 AS WEATHER2_GK1,
-# MAGIC                                                                 w.WEATHER1_CU1 AS WEATHER2_CU1,
-# MAGIC                                                                 w.WEATHER1_AA3 AS WEATHER2_AA3,
-# MAGIC                                                                 w.WEATHER1_AM1 AS WEATHER2_AM1,
-# MAGIC                                                                 w.WEATHER1_OD3 AS WEATHER2_OD3,
-# MAGIC                                                                 w.WEATHER1_GA1 AS WEATHER2_GA1,
-# MAGIC                                                                 w.WEATHER1_AT2 AS WEATHER2_AT2,
-# MAGIC                                                                 w.WEATHER1_AI6 AS WEATHER2_AI6,
-# MAGIC                                                                 w.WEATHER1_AT8 AS WEATHER2_AT8,
-# MAGIC                                                                 w.WEATHER1_RH1 AS WEATHER2_RH1,
-# MAGIC                                                                 w.WEATHER1_MW4 AS WEATHER2_MW4,
-# MAGIC                                                                 w.WEATHER1_AA1 AS WEATHER2_AA1,
-# MAGIC                                                                 w.WEATHER1_AN1 AS WEATHER2_AN1,
-# MAGIC                                                                 w.WEATHER1_AH6 AS WEATHER2_AH6,
-# MAGIC                                                                 w.WEATHER1_CF3 AS WEATHER2_CF3,
-# MAGIC                                                                 w.WEATHER1_CF1 AS WEATHER2_CF1,
-# MAGIC                                                                 w.WEATHER1_CIG_CEILING_DETERMINATION_CODE AS WEATHER2_CIG_CEILING_DETERMINATION_CODE,
-# MAGIC                                                                 w.WEATHER1_AI2 AS WEATHER2_AI2,
-# MAGIC                                                                 w.WEATHER1_CN1 AS WEATHER2_CN1,
-# MAGIC                                                                 w.WEATHER1_CT3 AS WEATHER2_CT3,
-# MAGIC                                                                 w.WEATHER1_GG4 AS WEATHER2_GG4,
-# MAGIC                                                                 w.WEATHER1_CB1 AS WEATHER2_CB1,
-# MAGIC                                                                 w.WEATHER1_GD2 AS WEATHER2_GD2,
-# MAGIC                                                                 w.WEATHER1_GA4 AS WEATHER2_GA4,
-# MAGIC                                                                 w.WEATHER1_KA1 AS WEATHER2_KA1,
-# MAGIC                                                                 w.WEATHER1_AD1 AS WEATHER2_AD1,
-# MAGIC                                                                 w.WEATHER1_WA1 AS WEATHER2_WA1,
-# MAGIC                                                                 w.WEATHER1_AW1 AS WEATHER2_AW1,
-# MAGIC                                                                 w.WEATHER1_MH1 AS WEATHER2_MH1,
-# MAGIC                                                                 w.WEATHER1_KB2 AS WEATHER2_KB2,
-# MAGIC                                                                 w.WEATHER1_KG1 AS WEATHER2_KG1,
-# MAGIC                                                                 w.WEATHER1_AA2 AS WEATHER2_AA2,
-# MAGIC                                                                 w.WEATHER1_GG2 AS WEATHER2_GG2,
-# MAGIC                                                                 w.WEATHER1_KC1 AS WEATHER2_KC1,
-# MAGIC                                                                 w.WEATHER1_OC1 AS WEATHER2_OC1,
-# MAGIC                                                                 w.WEATHER1_IA1 AS WEATHER2_IA1,
-# MAGIC                                                                 w.WEATHER1_AW5 AS WEATHER2_AW5,
-# MAGIC                                                                 w.WEATHER1_WND_DIRECTION_ANGLE AS WEATHER2_WND_DIRECTION_ANGLE,
-# MAGIC                                                                 w.WEATHER1_IA2 AS WEATHER2_IA2,
-# MAGIC                                                                 w.WEATHER1_GJ1 AS WEATHER2_GJ1,
-# MAGIC                                                                 w.WEATHER1_GA3 AS WEATHER2_GA3,
-# MAGIC                                                                 w.WEATHER1_GD5 AS WEATHER2_GD5,
-# MAGIC                                                                 w.WEATHER1_CR1 AS WEATHER2_CR1,
-# MAGIC                                                                 w.WEATHER1_CF2 AS WEATHER2_CF2,
-# MAGIC                                                                 w.WEATHER1_DEW_POINT_QUALITY_CODE AS WEATHER2_DEW_POINT_QUALITY_CODE,
-# MAGIC                                                                 w.WEATHER1_AT1 AS WEATHER2_AT1,
-# MAGIC                                                                 w.WEATHER1_KB1 AS WEATHER2_KB1,
-# MAGIC                                                                 w.WEATHER1_GD3 AS WEATHER2_GD3,
-# MAGIC                                                                 w.WEATHER1_KC2 AS WEATHER2_KC2,
-# MAGIC                                                                 w.WEATHER1_CV2 AS WEATHER2_CV2,
-# MAGIC                                                                 w.WEATHER1_AL2 AS WEATHER2_AL2,
-# MAGIC                                                                 w.WEATHER1_AH5 AS WEATHER2_AH5,
-# MAGIC                                                                 w.WEATHER1_KG2 AS WEATHER2_KG2,
-# MAGIC                                                                 w.WEATHER1_ME1 AS WEATHER2_ME1,
-# MAGIC                                                                 w.WEATHER1_AE1 AS WEATHER2_AE1,
-# MAGIC                                                                 w.WEATHER1_AW6 AS WEATHER2_AW6,
-# MAGIC                                                                 w.WEATHER1_AX1 AS WEATHER2_AX1,
-# MAGIC                                                                 w.WEATHER1_KE1 AS WEATHER2_KE1,
-# MAGIC                                                                 w.WEATHER1_SA1 AS WEATHER2_SA1,
-# MAGIC                                                                 w.WEATHER1_OB1 AS WEATHER2_OB1,
-# MAGIC                                                                 w.WEATHER1_AZ1 AS WEATHER2_AZ1,
-# MAGIC                                                                 w.WEATHER1_MD1 AS WEATHER2_MD1,
-# MAGIC                                                                 w.WEATHER1_AA4 AS WEATHER2_AA4,
-# MAGIC                                                                 w.WEATHER1_MV2 AS WEATHER2_MV2,
-# MAGIC                                                                 w.WEATHER1_WND_TYPE_CODE AS WEATHER2_WND_TYPE_CODE,
-# MAGIC                                                                 w.WEATHER1_TMP_AIR_TEMP_QUALITY_CODE AS WEATHER2_TMP_AIR_TEMP_QUALITY_CODE,
-# MAGIC                                                                 w.WEATHER1_GD4 AS WEATHER2_GD4,
-# MAGIC                                                                 w.WEATHER1_AL1 AS WEATHER2_AL1,
-# MAGIC                                                                 w.WEATHER1_GA6 AS WEATHER2_GA6,
-# MAGIC                                                                 w.WEATHER1_OD1 AS WEATHER2_OD1,
-# MAGIC                                                                 w.WEATHER1_AB1 AS WEATHER2_AB1,
-# MAGIC                                                                 w.WEATHER1_CW1 AS WEATHER2_CW1,
-# MAGIC                                                                 w.WEATHER1_AH4 AS WEATHER2_AH4,
-# MAGIC                                                                 w.WEATHER1_SLP_SEA_LEVEL_PRES AS WEATHER2_SLP_SEA_LEVEL_PRES,
-# MAGIC                                                                 w.WEATHER1_AX2 AS WEATHER2_AX2,
-# MAGIC                                                                 w.WEATHER1_IB2 AS WEATHER2_IB2,
-# MAGIC                                                                 w.WEATHER1_IB1 AS WEATHER2_IB1,
-# MAGIC                                                                 w.WEATHER1_AX4 AS WEATHER2_AX4,
-# MAGIC                                                                 w.WEATHER1_WND_SPEED_RATE AS WEATHER2_WND_SPEED_RATE,
-# MAGIC                                                                 w.WEATHER1_AT6 AS WEATHER2_AT6,
-# MAGIC                                                                 w.WEATHER1_KB3 AS WEATHER2_KB3,
-# MAGIC                                                                 w.WEATHER1_MW6 AS WEATHER2_MW6,
-# MAGIC                                                                 w.WEATHER1_AH2 AS WEATHER2_AH2,
-# MAGIC                                                                 w.WEATHER1_GG1 AS WEATHER2_GG1,
-# MAGIC                                                                 w.WEATHER1_AZ2 AS WEATHER2_AZ2,
-# MAGIC                                                                 w.WEATHER1_QUALITY_CONTROL AS WEATHER2_QUALITY_CONTROL,
-# MAGIC                                                                 w.WEATHER1_AY2 AS WEATHER2_AY2,
-# MAGIC                                                                 w.WEATHER1_CH1 AS WEATHER2_CH1,
-# MAGIC                                                                 w.WEATHER1_AU5 AS WEATHER2_AU5,
-# MAGIC                                                                 w.WEATHER1_HL1 AS WEATHER2_HL1,
-# MAGIC                                                                 w.WEATHER1_CIG_CAVOK_CODE AS WEATHER2_CIG_CAVOK_CODE,
-# MAGIC                                                                 w.WEATHER1_VIS_DISTANCE_DIMENSION AS WEATHER2_VIS_DISTANCE_DIMENSION,
-# MAGIC                                                                 w.WEATHER1_GH1 AS WEATHER2_GH1,
-# MAGIC                                                                 w.WEATHER1_WEATHER_STATION AS WEATHER2_WEATHER_STATION,
-# MAGIC                                                                 w.WEATHER1_AI5 AS WEATHER2_AI5,
-# MAGIC                                                                 w.WEATHER1_GG3 AS WEATHER2_GG3,
-# MAGIC                                                                 w.WEATHER1_AT3 AS WEATHER2_AT3,
-# MAGIC                                                                 w.WEATHER1_MW3 AS WEATHER2_MW3,
-# MAGIC                                                                 w.WEATHER1_CT2 AS WEATHER2_CT2,
-# MAGIC                                                                 w.WEATHER1_KF1 AS WEATHER2_KF1,
-# MAGIC                                                                 w.WEATHER1_RH2 AS WEATHER2_RH2,
-# MAGIC                                                                 w.WEATHER1_EQD AS WEATHER2_EQD,
-# MAGIC                                                                 w.WEATHER1_CI1 AS WEATHER2_CI1,
-# MAGIC                                                                 w.WEATHER1_VIS_DISTANCE_QUALITY_CODE AS WEATHER2_VIS_DISTANCE_QUALITY_CODE,
-# MAGIC                                                                 w.WEATHER1_VIS_QUALITY_VARIABILITY_CODE AS WEATHER2_VIS_QUALITY_VARIABILITY_CODE,
-# MAGIC                                                                 w.WEATHER1_WEATHER_SOURCE AS WEATHER2_WEATHER_SOURCE,
-# MAGIC                                                                 w.WEATHER1_WND_QUALITY_CODE AS WEATHER2_WND_QUALITY_CODE,
-# MAGIC                                                                 w.WEATHER1_WND_SPEED_QUALITY_CODE AS WEATHER2_WND_SPEED_QUALITY_CODE,
-# MAGIC                                                                 w.w2_row_num
-# MAGIC                                                           FROM (
-# MAGIC                                                                 SELECT *, ROW_NUMBER() OVER ( 
-# MAGIC                                                                       partition by WEATHER1_WEATHER_KEY 
-# MAGIC                                                                       ORDER BY WEATHER1_WEATHER_DATE ASC 
-# MAGIC                                                                 ) as w2_row_num 
-# MAGIC                                                                 FROM weather_processed 
-# MAGIC                                                             ) as w
-# MAGIC                                                             WHERE w.w2_row_num = 1 
-# MAGIC                                                         ) as w2
-# MAGIC                                                        ON fp.DEST_WEATHER_KEY = w2.WEATHER2_WEATHER_KEY
+# MAGIC LOCATION "/airline_delays/$username/DLRS/flights_and_weather/processed"
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC CREATE TABLE flights_and_weather_processed
-# MAGIC USING DELTA
-# MAGIC LOCATION '/airline_delays/kevin/DLRS/flights_and_weather'
-# MAGIC AS SELECT * FROM flights_processed VERSION AS OF 3 fp JOIN ( 
-# MAGIC                                                           SELECT * FROM (
-# MAGIC                                                                 SELECT *, ROW_NUMBER() OVER ( 
-# MAGIC                                                                       partition by WEATHER1_WEATHER_KEY 
-# MAGIC                                                                       ORDER BY WEATHER1_WEATHER_DATE ASC 
-# MAGIC                                                                 ) as w1_row_num 
-# MAGIC                                                                 FROM weather_processed 
-# MAGIC                                                             ) as ordered_weather 
-# MAGIC                                                             WHERE ordered_weather.w1_row_num = 1 
-# MAGIC                                                         ) as w1 
-# MAGIC                                                         ON fp.ORIGIN_WEATHER_KEY = w1.WEATHER1_WEATHER_KEY
+spark.conf.set("spark.sql.shuffle.partitions", 8)
 
 # COMMAND ----------
 
@@ -1888,207 +1611,1522 @@ flights_and_weather_loc = f"/airline_delays/{username}/DLRS/flights_and_weather/
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC # END OF WORK
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+# Ensure we are always using the most recent version of the data in the delta lake
+weather_processed = spark.read.format('delta').load(f'{weather_loc}processed')
+flights_processed = spark.read.format('delta').load(f'{flights_loc}processed')
+
+# COMMAND ----------
+
 # MAGIC %sql
-# MAGIC CREATE TABLE flights_and_weather_combined_processed
+# MAGIC SELECT * FROM (
+# MAGIC     SELECT w.*, 
+# MAGIC     ROW_NUMBER() OVER (ORDER BY WEATHER_KEY DESC) rn 
+# MAGIC     FROM weather_processed w
+# MAGIC )
+# MAGIC WHERE rn = 1
+# MAGIC LIMIT 10
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT * 
+# MAGIC      FROM flights_processed fp
+# MAGIC      JOIN ( 
+# MAGIC             SELECT * FROM (
+# MAGIC                   SELECT *, ROW_NUMBER() OVER ( 
+# MAGIC                         partition by WEATHER_KEY 
+# MAGIC                         ORDER BY WEATHER_TIMESTAMP ASC 
+# MAGIC                   ) as w1_row_num 
+# MAGIC                   FROM weather_processed 
+# MAGIC               ) as ordered_weather 
+# MAGIC               WHERE ordered_weather.w1_row_num = 1 
+# MAGIC           ) as w1 
+# MAGIC           ON fp.ORIGIN_WEATHER_KEY = w1.WEATHER_KEY
+# MAGIC LIMIT 10
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC CREATE TABLE flights_and_weather_processed
 # MAGIC USING DELTA
-# MAGIC LOCATION '/airline_delays/kevin/DLRS/flights_and_weather_combined'
-# MAGIC AS SELECT * FROM flights_and_weather_processed fp JOIN (
-# MAGIC                                                         SELECT  w.WEATHER1_GN1 AS WEATHER2_GN1,
-# MAGIC                                                                 w.WEATHER1_GF1 AS WEATHER2_GF1,
-# MAGIC                                                                 w.WEATHER1_UA1 AS WEATHER2_UA1,
-# MAGIC                                                                 w.WEATHER1_AU2 AS WEATHER2_AU2,
-# MAGIC                                                                 w.WEATHER1_AX5 AS WEATHER2_AX5,
-# MAGIC                                                                 w.WEATHER1_TMP_AIR_TEMP AS WEATHER2_TMP_AIR_TEMP,
-# MAGIC                                                                 w.WEATHER1_MK1 AS WEATHER2_MK1,
-# MAGIC                                                                 w.WEATHER1_CN3 AS WEATHER2_CN3,
-# MAGIC                                                                 w.WEATHER1_GM1 AS WEATHER2_GM1,
-# MAGIC                                                                 w.WEATHER1_GA2 AS WEATHER2_GA2,
-# MAGIC                                                                 w.WEATHER1_SLP_SEA_LEVEL_PRES_QUALITY_CODE AS WEATHER2_SLP_SEA_LEVEL_PRES_QUALITY_CODE,
-# MAGIC                                                                 w.WEATHER1_AW7 AS WEATHER2_AW7,
-# MAGIC                                                                 w.WEATHER1_MG1 AS WEATHER2_MG1,
-# MAGIC                                                                 w.WEATHER1_CG3 AS WEATHER2_CG3,
-# MAGIC                                                                 w.WEATHER1_VIS_VARIABILITY_CODE AS WEATHER2_VIS_VARIABILITY_CODE,
-# MAGIC                                                                 w.WEATHER1_GO1 AS WEATHER2_GO1,
-# MAGIC                                                                 w.WEATHER1_AL3 AS WEATHER2_AL3,
-# MAGIC                                                                 w.WEATHER1_AI1 AS WEATHER2_AI1,
-# MAGIC                                                                 w.WEATHER1_MF1 AS WEATHER2_MF1,
-# MAGIC                                                                 w.WEATHER1_WEATHER_KEY AS WEATHER2_WEATHER_KEY,
-# MAGIC                                                                 w.WEATHER1_KA3 AS WEATHER2_KA3,
-# MAGIC                                                                 w.WEATHER1_AI4 AS WEATHER2_AI4,
-# MAGIC                                                                 w.WEATHER1_AK1 AS WEATHER2_AK1,
-# MAGIC                                                                 w.WEATHER1_OE3 AS WEATHER2_OE3,
-# MAGIC                                                                 w.WEATHER1_AW2 AS WEATHER2_AW2,
-# MAGIC                                                                 w.WEATHER1_REM AS WEATHER2_REM,
-# MAGIC                                                                 w.WEATHER1_OD2 AS WEATHER2_OD2,
-# MAGIC                                                                 w.WEATHER1_CN4 AS WEATHER2_CN4,
-# MAGIC                                                                 w.WEATHER1_AO1 AS WEATHER2_AO1,
-# MAGIC                                                                 w.WEATHER1_CO1 AS WEATHER2_CO1,
-# MAGIC                                                                 w.WEATHER1_OE2 AS WEATHER2_OE2,
-# MAGIC                                                                 w.WEATHER1_CG1 AS WEATHER2_CG1,
-# MAGIC                                                                 w.WEATHER1_AX6 AS WEATHER2_AX6,
-# MAGIC                                                                 w.WEATHER1_KA2 AS WEATHER2_KA2,
-# MAGIC                                                                 w.WEATHER1_CU2 AS WEATHER2_CU2,
-# MAGIC                                                                 w.WEATHER1_AH3 AS WEATHER2_AH3,
-# MAGIC                                                                 w.WEATHER1_OE1 AS WEATHER2_OE1,
-# MAGIC                                                                 w.WEATHER1_MA1 AS WEATHER2_MA1,
-# MAGIC                                                                 w.WEATHER1_CT1 AS WEATHER2_CT1,
-# MAGIC                                                                 w.WEATHER1_AW4 AS WEATHER2_AW4,
-# MAGIC                                                                 w.WEATHER1_AU3 AS WEATHER2_AU3,
-# MAGIC                                                                 w.WEATHER1_GA5 AS WEATHER2_GA5,
-# MAGIC                                                                 w.WEATHER1_UG1 AS WEATHER2_UG1,
-# MAGIC                                                                 w.WEATHER1_GE1 AS WEATHER2_GE1,
-# MAGIC                                                                 w.WEATHER1_AI3 AS WEATHER2_AI3,
-# MAGIC                                                                 w.WEATHER1_GD1 AS WEATHER2_GD1,
-# MAGIC                                                                 w.WEATHER1_CIG_CEILING_QUALITY_CODE AS WEATHER2_CIG_CEILING_QUALITY_CODE,
-# MAGIC                                                                 w.WEATHER1_AX3 AS WEATHER2_AX3,
-# MAGIC                                                                 w.WEATHER1_KD1 AS WEATHER2_KD1,
-# MAGIC                                                                 w.WEATHER1_CIG_CEILING_HEIGHT_DIMENSION AS WEATHER2_CIG_CEILING_HEIGHT_DIMENSION,
-# MAGIC                                                                 w.WEATHER1_AW3 AS WEATHER2_AW3,
-# MAGIC                                                                 w.WEATHER1_CV1 AS WEATHER2_CV1,
-# MAGIC                                                                 w.WEATHER1_AY1 AS WEATHER2_AY1,
-# MAGIC                                                                 w.WEATHER1_MV1 AS WEATHER2_MV1,
-# MAGIC                                                                 w.WEATHER1_KA4 AS WEATHER2_KA4,
-# MAGIC                                                                 w.WEATHER1_AJ1 AS WEATHER2_AJ1,
-# MAGIC                                                                 w.WEATHER1_WEATHER_DATE AS WEATHER2_WEATHER_DATE,
-# MAGIC                                                                 w.WEATHER1_CG2 AS WEATHER2_CG2,
-# MAGIC                                                                 w.WEATHER1_KD2 AS WEATHER2_KD2,
-# MAGIC                                                                 w.WEATHER1_DEW_POINT_TEMP AS WEATHER2_DEW_POINT_TEMP,
-# MAGIC                                                                 w.WEATHER1_AH1 AS WEATHER2_AH1,
-# MAGIC                                                                 w.WEATHER1_AU1 AS WEATHER2_AU1,
-# MAGIC                                                                 w.WEATHER1_GL1 AS WEATHER2_GL1,
-# MAGIC                                                                 w.WEATHER1_MW5 AS WEATHER2_MW5,
-# MAGIC                                                                 w.WEATHER1_AU4 AS WEATHER2_AU4,
-# MAGIC                                                                 w.WEATHER1_AT4 AS WEATHER2_AT4,
-# MAGIC                                                                 w.WEATHER1_CN2 AS WEATHER2_CN2,
-# MAGIC                                                                 w.WEATHER1_CV3 AS WEATHER2_CV3,
-# MAGIC                                                                 w.WEATHER1_MW2 AS WEATHER2_MW2,
-# MAGIC                                                                 w.WEATHER1_AT7 AS WEATHER2_AT7,
-# MAGIC                                                                 w.WEATHER1_ED1 AS WEATHER2_ED1,
-# MAGIC                                                                 w.WEATHER1_CU3 AS WEATHER2_CU3,
-# MAGIC                                                                 w.WEATHER1_UG2 AS WEATHER2_UG2,
-# MAGIC                                                                 w.WEATHER1_WD1 AS WEATHER2_WD1,
-# MAGIC                                                                 w.WEATHER1_RH3 AS WEATHER2_RH3,
-# MAGIC                                                                 w.WEATHER1_AT5 AS WEATHER2_AT5,
-# MAGIC                                                                 w.WEATHER1_MW1 AS WEATHER2_MW1,
-# MAGIC                                                                 w.WEATHER1_GK1 AS WEATHER2_GK1,
-# MAGIC                                                                 w.WEATHER1_CU1 AS WEATHER2_CU1,
-# MAGIC                                                                 w.WEATHER1_AA3 AS WEATHER2_AA3,
-# MAGIC                                                                 w.WEATHER1_AM1 AS WEATHER2_AM1,
-# MAGIC                                                                 w.WEATHER1_OD3 AS WEATHER2_OD3,
-# MAGIC                                                                 w.WEATHER1_GA1 AS WEATHER2_GA1,
-# MAGIC                                                                 w.WEATHER1_AT2 AS WEATHER2_AT2,
-# MAGIC                                                                 w.WEATHER1_AI6 AS WEATHER2_AI6,
-# MAGIC                                                                 w.WEATHER1_AT8 AS WEATHER2_AT8,
-# MAGIC                                                                 w.WEATHER1_RH1 AS WEATHER2_RH1,
-# MAGIC                                                                 w.WEATHER1_MW4 AS WEATHER2_MW4,
-# MAGIC                                                                 w.WEATHER1_AA1 AS WEATHER2_AA1,
-# MAGIC                                                                 w.WEATHER1_AN1 AS WEATHER2_AN1,
-# MAGIC                                                                 w.WEATHER1_AH6 AS WEATHER2_AH6,
-# MAGIC                                                                 w.WEATHER1_CF3 AS WEATHER2_CF3,
-# MAGIC                                                                 w.WEATHER1_CF1 AS WEATHER2_CF1,
-# MAGIC                                                                 w.WEATHER1_CIG_CEILING_DETERMINATION_CODE AS WEATHER2_CIG_CEILING_DETERMINATION_CODE,
-# MAGIC                                                                 w.WEATHER1_AI2 AS WEATHER2_AI2,
-# MAGIC                                                                 w.WEATHER1_CN1 AS WEATHER2_CN1,
-# MAGIC                                                                 w.WEATHER1_CT3 AS WEATHER2_CT3,
-# MAGIC                                                                 w.WEATHER1_GG4 AS WEATHER2_GG4,
-# MAGIC                                                                 w.WEATHER1_CB1 AS WEATHER2_CB1,
-# MAGIC                                                                 w.WEATHER1_GD2 AS WEATHER2_GD2,
-# MAGIC                                                                 w.WEATHER1_GA4 AS WEATHER2_GA4,
-# MAGIC                                                                 w.WEATHER1_KA1 AS WEATHER2_KA1,
-# MAGIC                                                                 w.WEATHER1_AD1 AS WEATHER2_AD1,
-# MAGIC                                                                 w.WEATHER1_WA1 AS WEATHER2_WA1,
-# MAGIC                                                                 w.WEATHER1_AW1 AS WEATHER2_AW1,
-# MAGIC                                                                 w.WEATHER1_MH1 AS WEATHER2_MH1,
-# MAGIC                                                                 w.WEATHER1_KB2 AS WEATHER2_KB2,
-# MAGIC                                                                 w.WEATHER1_KG1 AS WEATHER2_KG1,
-# MAGIC                                                                 w.WEATHER1_AA2 AS WEATHER2_AA2,
-# MAGIC                                                                 w.WEATHER1_GG2 AS WEATHER2_GG2,
-# MAGIC                                                                 w.WEATHER1_KC1 AS WEATHER2_KC1,
-# MAGIC                                                                 w.WEATHER1_OC1 AS WEATHER2_OC1,
-# MAGIC                                                                 w.WEATHER1_IA1 AS WEATHER2_IA1,
-# MAGIC                                                                 w.WEATHER1_AW5 AS WEATHER2_AW5,
-# MAGIC                                                                 w.WEATHER1_WND_DIRECTION_ANGLE AS WEATHER2_WND_DIRECTION_ANGLE,
-# MAGIC                                                                 w.WEATHER1_IA2 AS WEATHER2_IA2,
-# MAGIC                                                                 w.WEATHER1_GJ1 AS WEATHER2_GJ1,
-# MAGIC                                                                 w.WEATHER1_GA3 AS WEATHER2_GA3,
-# MAGIC                                                                 w.WEATHER1_GD5 AS WEATHER2_GD5,
-# MAGIC                                                                 w.WEATHER1_CR1 AS WEATHER2_CR1,
-# MAGIC                                                                 w.WEATHER1_CF2 AS WEATHER2_CF2,
-# MAGIC                                                                 w.WEATHER1_DEW_POINT_QUALITY_CODE AS WEATHER2_DEW_POINT_QUALITY_CODE,
-# MAGIC                                                                 w.WEATHER1_AT1 AS WEATHER2_AT1,
-# MAGIC                                                                 w.WEATHER1_KB1 AS WEATHER2_KB1,
-# MAGIC                                                                 w.WEATHER1_GD3 AS WEATHER2_GD3,
-# MAGIC                                                                 w.WEATHER1_KC2 AS WEATHER2_KC2,
-# MAGIC                                                                 w.WEATHER1_CV2 AS WEATHER2_CV2,
-# MAGIC                                                                 w.WEATHER1_AL2 AS WEATHER2_AL2,
-# MAGIC                                                                 w.WEATHER1_AH5 AS WEATHER2_AH5,
-# MAGIC                                                                 w.WEATHER1_KG2 AS WEATHER2_KG2,
-# MAGIC                                                                 w.WEATHER1_ME1 AS WEATHER2_ME1,
-# MAGIC                                                                 w.WEATHER1_AE1 AS WEATHER2_AE1,
-# MAGIC                                                                 w.WEATHER1_AW6 AS WEATHER2_AW6,
-# MAGIC                                                                 w.WEATHER1_AX1 AS WEATHER2_AX1,
-# MAGIC                                                                 w.WEATHER1_KE1 AS WEATHER2_KE1,
-# MAGIC                                                                 w.WEATHER1_SA1 AS WEATHER2_SA1,
-# MAGIC                                                                 w.WEATHER1_OB1 AS WEATHER2_OB1,
-# MAGIC                                                                 w.WEATHER1_AZ1 AS WEATHER2_AZ1,
-# MAGIC                                                                 w.WEATHER1_MD1 AS WEATHER2_MD1,
-# MAGIC                                                                 w.WEATHER1_AA4 AS WEATHER2_AA4,
-# MAGIC                                                                 w.WEATHER1_MV2 AS WEATHER2_MV2,
-# MAGIC                                                                 w.WEATHER1_WND_TYPE_CODE AS WEATHER2_WND_TYPE_CODE,
-# MAGIC                                                                 w.WEATHER1_TMP_AIR_TEMP_QUALITY_CODE AS WEATHER2_TMP_AIR_TEMP_QUALITY_CODE,
-# MAGIC                                                                 w.WEATHER1_GD4 AS WEATHER2_GD4,
-# MAGIC                                                                 w.WEATHER1_AL1 AS WEATHER2_AL1,
-# MAGIC                                                                 w.WEATHER1_GA6 AS WEATHER2_GA6,
-# MAGIC                                                                 w.WEATHER1_OD1 AS WEATHER2_OD1,
-# MAGIC                                                                 w.WEATHER1_AB1 AS WEATHER2_AB1,
-# MAGIC                                                                 w.WEATHER1_CW1 AS WEATHER2_CW1,
-# MAGIC                                                                 w.WEATHER1_AH4 AS WEATHER2_AH4,
-# MAGIC                                                                 w.WEATHER1_SLP_SEA_LEVEL_PRES AS WEATHER2_SLP_SEA_LEVEL_PRES,
-# MAGIC                                                                 w.WEATHER1_AX2 AS WEATHER2_AX2,
-# MAGIC                                                                 w.WEATHER1_IB2 AS WEATHER2_IB2,
-# MAGIC                                                                 w.WEATHER1_IB1 AS WEATHER2_IB1,
-# MAGIC                                                                 w.WEATHER1_AX4 AS WEATHER2_AX4,
-# MAGIC                                                                 w.WEATHER1_WND_SPEED_RATE AS WEATHER2_WND_SPEED_RATE,
-# MAGIC                                                                 w.WEATHER1_AT6 AS WEATHER2_AT6,
-# MAGIC                                                                 w.WEATHER1_KB3 AS WEATHER2_KB3,
-# MAGIC                                                                 w.WEATHER1_MW6 AS WEATHER2_MW6,
-# MAGIC                                                                 w.WEATHER1_AH2 AS WEATHER2_AH2,
-# MAGIC                                                                 w.WEATHER1_GG1 AS WEATHER2_GG1,
-# MAGIC                                                                 w.WEATHER1_AZ2 AS WEATHER2_AZ2,
-# MAGIC                                                                 w.WEATHER1_QUALITY_CONTROL AS WEATHER2_QUALITY_CONTROL,
-# MAGIC                                                                 w.WEATHER1_AY2 AS WEATHER2_AY2,
-# MAGIC                                                                 w.WEATHER1_CH1 AS WEATHER2_CH1,
-# MAGIC                                                                 w.WEATHER1_AU5 AS WEATHER2_AU5,
-# MAGIC                                                                 w.WEATHER1_HL1 AS WEATHER2_HL1,
-# MAGIC                                                                 w.WEATHER1_CIG_CAVOK_CODE AS WEATHER2_CIG_CAVOK_CODE,
-# MAGIC                                                                 w.WEATHER1_VIS_DISTANCE_DIMENSION AS WEATHER2_VIS_DISTANCE_DIMENSION,
-# MAGIC                                                                 w.WEATHER1_GH1 AS WEATHER2_GH1,
-# MAGIC                                                                 w.WEATHER1_WEATHER_STATION AS WEATHER2_WEATHER_STATION,
-# MAGIC                                                                 w.WEATHER1_AI5 AS WEATHER2_AI5,
-# MAGIC                                                                 w.WEATHER1_GG3 AS WEATHER2_GG3,
-# MAGIC                                                                 w.WEATHER1_AT3 AS WEATHER2_AT3,
-# MAGIC                                                                 w.WEATHER1_MW3 AS WEATHER2_MW3,
-# MAGIC                                                                 w.WEATHER1_CT2 AS WEATHER2_CT2,
-# MAGIC                                                                 w.WEATHER1_KF1 AS WEATHER2_KF1,
-# MAGIC                                                                 w.WEATHER1_RH2 AS WEATHER2_RH2,
-# MAGIC                                                                 w.WEATHER1_EQD AS WEATHER2_EQD,
-# MAGIC                                                                 w.WEATHER1_CI1 AS WEATHER2_CI1,
-# MAGIC                                                                 w.WEATHER1_VIS_DISTANCE_QUALITY_CODE AS WEATHER2_VIS_DISTANCE_QUALITY_CODE,
-# MAGIC                                                                 w.WEATHER1_VIS_QUALITY_VARIABILITY_CODE AS WEATHER2_VIS_QUALITY_VARIABILITY_CODE,
-# MAGIC                                                                 w.WEATHER1_WEATHER_SOURCE AS WEATHER2_WEATHER_SOURCE,
-# MAGIC                                                                 w.WEATHER1_WND_QUALITY_CODE AS WEATHER2_WND_QUALITY_CODE,
-# MAGIC                                                                 w.WEATHER1_WND_SPEED_QUALITY_CODE AS WEATHER2_WND_SPEED_QUALITY_CODE,
-# MAGIC                                                                 w.w2_row_num
+# MAGIC LOCATION '/airline_delays/$username/DLRS/flights_and_weather'
+# MAGIC AS SELECT * 
+# MAGIC      FROM flights_processed
+# MAGIC      JOIN ( 
+# MAGIC             SELECT * FROM (
+# MAGIC                   SELECT *, ROW_NUMBER() OVER ( 
+# MAGIC                         partition by WEATHER_KEY 
+# MAGIC                         ORDER BY WEATHER_TIMESTAMP ASC 
+# MAGIC                   ) as w1_row_num 
+# MAGIC                   FROM weather_processed 
+# MAGIC               ) as ordered_weather 
+# MAGIC               WHERE ordered_weather.w1_row_num = 1 
+# MAGIC           ) as w1 
+# MAGIC           ON fp.ORIGIN_WEATHER_KEY = w1.WEATHER_KEY
+
+# COMMAND ----------
+
+
+
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+w = Window.partitionBy("WEATHER_KEY").orderBy("ORIGIN_WEATHER_TIMESTAMP")
+
+fp_joined = origin.withColumn("row_number", f.row_number().over(w)).filter(f.col("row_number") == 1).drop("row_number")\
+                  .join(fp_sample, origin.WEATHER_KEY == fp_sample.ORIGIN_WEATHER_KEY).drop("WEATHER_KEY")\
+                  .select("*")
+
+
+# COMMAND ----------
+
+origin = spark.read.format('delta').load(f'{weather_loc}processed')
+dest = spark.read.format('delta').load(f'{weather_loc}processed')
+
+for col in origin.columns:
+  if col != 'WEATHER_KEY':
+    print("w." + col + " as ORIGIN_" + col + ",")
+
+    
+for col in dest.columns:
+  if col != 'WEATHER_KEY':
+    print("w." + col + " as DEST_" + col + ",")
+
+# COMMAND ----------
+
+for col in flights_processed.columns:
+    print("fp." + col + ",")
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC select * from flights_and_weather_processed
+
+# COMMAND ----------
+
+dbutils.fs.rm("/airline_delays/kevin/DLRS/flights_and_weather_origin/processed", recurse=True)
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC CREATE TABLE flights_and_weather_origin
+# MAGIC USING DELTA
+# MAGIC LOCATION '/airline_delays/$username/DLRS/flights_and_weather_origin/processed'
+# MAGIC AS SELECT fp.YEAR,
+# MAGIC           fp.QUARTER,
+# MAGIC           fp.MONTH,
+# MAGIC           fp.DAY_OF_MONTH,
+# MAGIC           fp.DAY_OF_WEEK,
+# MAGIC           fp.OP_UNIQUE_CARRIER,
+# MAGIC           fp.OP_CARRIER_AIRLINE_ID,
+# MAGIC           fp.OP_CARRIER,
+# MAGIC           fp.TAIL_NUM,
+# MAGIC           fp.OP_CARRIER_FL_NUM,
+# MAGIC           fp.ORIGIN_AIRPORT_ID,
+# MAGIC           fp.ORIGIN_AIRPORT_SEQ_ID,
+# MAGIC           fp.ORIGIN_CITY_MARKET_ID,
+# MAGIC           fp.ORIGIN,
+# MAGIC           fp.ORIGIN_CITY_NAME,
+# MAGIC           fp.ORIGIN_STATE_ABR,
+# MAGIC           fp.ORIGIN_STATE_FIPS,
+# MAGIC           fp.ORIGIN_STATE_NM,
+# MAGIC           fp.ORIGIN_WAC,
+# MAGIC           fp.DEST_AIRPORT_ID,
+# MAGIC           fp.DEST_AIRPORT_SEQ_ID,
+# MAGIC           fp.DEST_CITY_MARKET_ID,
+# MAGIC           fp.DEST,
+# MAGIC           fp.DEST_CITY_NAME,
+# MAGIC           fp.DEST_STATE_ABR,
+# MAGIC           fp.DEST_STATE_FIPS,
+# MAGIC           fp.DEST_STATE_NM,
+# MAGIC           fp.DEST_WAC,
+# MAGIC           fp.CRS_DEP_TIME,
+# MAGIC           fp.DEP_TIME,
+# MAGIC           fp.DEP_DELAY,
+# MAGIC           fp.DEP_DELAY_NEW,
+# MAGIC           fp.DEP_DEL15,
+# MAGIC           fp.DEP_DELAY_GROUP,
+# MAGIC           fp.DEP_TIME_BLK,
+# MAGIC           fp.TAXI_OUT,
+# MAGIC           fp.WHEELS_OFF,
+# MAGIC           fp.WHEELS_ON,
+# MAGIC           fp.TAXI_IN,
+# MAGIC           fp.CRS_ARR_TIME,
+# MAGIC           fp.ARR_TIME,
+# MAGIC           fp.ARR_DELAY,
+# MAGIC           fp.ARR_DELAY_NEW,
+# MAGIC           fp.ARR_DEL15,
+# MAGIC           fp.ARR_DELAY_GROUP,
+# MAGIC           fp.ARR_TIME_BLK,
+# MAGIC           fp.CANCELLED,
+# MAGIC           fp.CANCELLATION_CODE,
+# MAGIC           fp.DIVERTED,
+# MAGIC           fp.CRS_ELAPSED_TIME,
+# MAGIC           fp.ACTUAL_ELAPSED_TIME,
+# MAGIC           fp.AIR_TIME,
+# MAGIC           fp.FLIGHTS,
+# MAGIC           fp.DISTANCE,
+# MAGIC           fp.DISTANCE_GROUP,
+# MAGIC           fp.CARRIER_DELAY,
+# MAGIC           fp.WEATHER_DELAY,
+# MAGIC           fp.NAS_DELAY,
+# MAGIC           fp.SECURITY_DELAY,
+# MAGIC           fp.LATE_AIRCRAFT_DELAY,
+# MAGIC           fp.FIRST_DEP_TIME,
+# MAGIC           fp.TOTAL_ADD_GTIME,
+# MAGIC           fp.LONGEST_ADD_GTIME,
+# MAGIC           fp.DIV_AIRPORT_LANDINGS,
+# MAGIC           fp.DIV_REACHED_DEST,
+# MAGIC           fp.DIV_ACTUAL_ELAPSED_TIME,
+# MAGIC           fp.DIV_ARR_DELAY,
+# MAGIC           fp.DIV_DISTANCE,
+# MAGIC           fp.DIV1_AIRPORT,
+# MAGIC           fp.DIV1_AIRPORT_ID,
+# MAGIC           fp.DIV1_AIRPORT_SEQ_ID,
+# MAGIC           fp.DIV1_WHEELS_ON,
+# MAGIC           fp.DIV1_TOTAL_GTIME,
+# MAGIC           fp.DIV1_LONGEST_GTIME,
+# MAGIC           fp.DIV1_WHEELS_OFF,
+# MAGIC           fp.DIV1_TAIL_NUM,
+# MAGIC           fp.DIV2_AIRPORT,
+# MAGIC           fp.DIV2_AIRPORT_ID,
+# MAGIC           fp.DIV2_AIRPORT_SEQ_ID,
+# MAGIC           fp.DIV2_WHEELS_ON,
+# MAGIC           fp.DIV2_TOTAL_GTIME,
+# MAGIC           fp.DIV2_LONGEST_GTIME,
+# MAGIC           fp.DIV2_WHEELS_OFF,
+# MAGIC           fp.DIV2_TAIL_NUM,
+# MAGIC           fp.DIV3_AIRPORT,
+# MAGIC           fp.DIV3_AIRPORT_ID,
+# MAGIC           fp.DIV3_AIRPORT_SEQ_ID,
+# MAGIC           fp.DIV3_WHEELS_ON,
+# MAGIC           fp.DIV3_TOTAL_GTIME,
+# MAGIC           fp.DIV3_LONGEST_GTIME,
+# MAGIC           fp.DIV3_WHEELS_OFF,
+# MAGIC           fp.DIV3_TAIL_NUM,
+# MAGIC           fp.DIV4_AIRPORT,
+# MAGIC           fp.DIV4_AIRPORT_ID,
+# MAGIC           fp.DIV4_AIRPORT_SEQ_ID,
+# MAGIC           fp.DIV4_WHEELS_ON,
+# MAGIC           fp.DIV4_TOTAL_GTIME,
+# MAGIC           fp.DIV4_LONGEST_GTIME,
+# MAGIC           fp.DIV4_WHEELS_OFF,
+# MAGIC           fp.DIV4_TAIL_NUM,
+# MAGIC           fp.DIV5_AIRPORT,
+# MAGIC           fp.DIV5_AIRPORT_ID,
+# MAGIC           fp.DIV5_AIRPORT_SEQ_ID,
+# MAGIC           fp.DIV5_WHEELS_ON,
+# MAGIC           fp.DIV5_TOTAL_GTIME,
+# MAGIC           fp.DIV5_LONGEST_GTIME,
+# MAGIC           fp.DIV5_WHEELS_OFF,
+# MAGIC           fp.DIV5_TAIL_NUM,
+# MAGIC           fp.IN_FLIGHT_AIR_DELAY,
+# MAGIC           fp.FL_DATE,
+# MAGIC           fp.IATA_ORIGIN,
+# MAGIC           fp.NEAREST_STATION_ID_ORIGIN,
+# MAGIC           fp.NEAREST_STATION_DIST_ORIGIN,
+# MAGIC           fp.IATA_DEST,
+# MAGIC           fp.NEAREST_STATION_ID_DEST,
+# MAGIC           fp.NEAREST_STATION_DIST_DEST,
+# MAGIC           fp.IATA,
+# MAGIC           fp.AIRPORT_TZ_NAME,
+# MAGIC           fp.CRS_DEP_TIME_HOUR,
+# MAGIC           fp.FLIGHT_TIME_UTC,
+# MAGIC           fp.WEATHER_PREDICTION_TIME_UTC,
+# MAGIC           fp.ORIGIN_WEATHER_KEY,
+# MAGIC           fp.DEST_WEATHER_KEY,
+# MAGIC           w1.ORIGIN_WEATHER_STATION,
+# MAGIC           w1.ORIGIN_WEATHER_TIMESTAMP,
+# MAGIC           w1.ORIGIN_WEATHER_SOURCE,
+# MAGIC           w1.ORIGIN_WEATHER_LAT,
+# MAGIC           w1.ORIGIN_WEATHER_LON,
+# MAGIC           w1.ORIGIN_WEATHER_ELEV,
+# MAGIC           w1.ORIGIN_WEATHER_NAME,
+# MAGIC           w1.ORIGIN_WEATHER_REPORT_TYPE,
+# MAGIC           w1.ORIGIN_WEATHER_CALL_SIGN,
+# MAGIC           w1.ORIGIN_QUALITY_CONTROL,
+# MAGIC           w1.ORIGIN_WND,
+# MAGIC           w1.ORIGIN_CIG,
+# MAGIC           w1.ORIGIN_VIS,
+# MAGIC           w1.ORIGIN_TMP,
+# MAGIC           w1.ORIGIN_DEW,
+# MAGIC           w1.ORIGIN_SLP,
+# MAGIC           w1.ORIGIN_AW1,
+# MAGIC           w1.ORIGIN_GA1,
+# MAGIC           w1.ORIGIN_GA2,
+# MAGIC           w1.ORIGIN_GA3,
+# MAGIC           w1.ORIGIN_GA4,
+# MAGIC           w1.ORIGIN_GE1,
+# MAGIC           w1.ORIGIN_GF1,
+# MAGIC           w1.ORIGIN_KA1,
+# MAGIC           w1.ORIGIN_KA2,
+# MAGIC           w1.ORIGIN_MA1,
+# MAGIC           w1.ORIGIN_MD1,
+# MAGIC           w1.ORIGIN_MW1,
+# MAGIC           w1.ORIGIN_MW2,
+# MAGIC           w1.ORIGIN_OC1,
+# MAGIC           w1.ORIGIN_OD1,
+# MAGIC           w1.ORIGIN_OD2,
+# MAGIC           w1.ORIGIN_REM,
+# MAGIC           w1.ORIGIN_EQD,
+# MAGIC           w1.ORIGIN_AW2,
+# MAGIC           w1.ORIGIN_AX4,
+# MAGIC           w1.ORIGIN_GD1,
+# MAGIC           w1.ORIGIN_AW5,
+# MAGIC           w1.ORIGIN_GN1,
+# MAGIC           w1.ORIGIN_AJ1,
+# MAGIC           w1.ORIGIN_AW3,
+# MAGIC           w1.ORIGIN_MK1,
+# MAGIC           w1.ORIGIN_KA4,
+# MAGIC           w1.ORIGIN_GG3,
+# MAGIC           w1.ORIGIN_AN1,
+# MAGIC           w1.ORIGIN_RH1,
+# MAGIC           w1.ORIGIN_AU5,
+# MAGIC           w1.ORIGIN_HL1,
+# MAGIC           w1.ORIGIN_OB1,
+# MAGIC           w1.ORIGIN_AT8,
+# MAGIC           w1.ORIGIN_AW7,
+# MAGIC           w1.ORIGIN_AZ1,
+# MAGIC           w1.ORIGIN_CH1,
+# MAGIC           w1.ORIGIN_RH3,
+# MAGIC           w1.ORIGIN_GK1,
+# MAGIC           w1.ORIGIN_IB1,
+# MAGIC           w1.ORIGIN_AX1,
+# MAGIC           w1.ORIGIN_CT1,
+# MAGIC           w1.ORIGIN_AK1,
+# MAGIC           w1.ORIGIN_CN2,
+# MAGIC           w1.ORIGIN_OE1,
+# MAGIC           w1.ORIGIN_MW5,
+# MAGIC           w1.ORIGIN_AO1,
+# MAGIC           w1.ORIGIN_KA3,
+# MAGIC           w1.ORIGIN_AA3,
+# MAGIC           w1.ORIGIN_CR1,
+# MAGIC           w1.ORIGIN_CF2,
+# MAGIC           w1.ORIGIN_KB2,
+# MAGIC           w1.ORIGIN_GM1,
+# MAGIC           w1.ORIGIN_AT5,
+# MAGIC           w1.ORIGIN_AY2,
+# MAGIC           w1.ORIGIN_MW6,
+# MAGIC           w1.ORIGIN_MG1,
+# MAGIC           w1.ORIGIN_AH6,
+# MAGIC           w1.ORIGIN_AU2,
+# MAGIC           w1.ORIGIN_GD2,
+# MAGIC           w1.ORIGIN_AW4,
+# MAGIC           w1.ORIGIN_MF1,
+# MAGIC           w1.ORIGIN_AA1,
+# MAGIC           w1.ORIGIN_AH2,
+# MAGIC           w1.ORIGIN_AH3,
+# MAGIC           w1.ORIGIN_OE3,
+# MAGIC           w1.ORIGIN_AT6,
+# MAGIC           w1.ORIGIN_AL2,
+# MAGIC           w1.ORIGIN_AL3,
+# MAGIC           w1.ORIGIN_AX5,
+# MAGIC           w1.ORIGIN_IB2,
+# MAGIC           w1.ORIGIN_AI3,
+# MAGIC           w1.ORIGIN_CV3,
+# MAGIC           w1.ORIGIN_WA1,
+# MAGIC           w1.ORIGIN_GH1,
+# MAGIC           w1.ORIGIN_KF1,
+# MAGIC           w1.ORIGIN_CU2,
+# MAGIC           w1.ORIGIN_CT3,
+# MAGIC           w1.ORIGIN_SA1,
+# MAGIC           w1.ORIGIN_AU1,
+# MAGIC           w1.ORIGIN_KD2,
+# MAGIC           w1.ORIGIN_AI5,
+# MAGIC           w1.ORIGIN_GO1,
+# MAGIC           w1.ORIGIN_GD3,
+# MAGIC           w1.ORIGIN_CG3,
+# MAGIC           w1.ORIGIN_AI1,
+# MAGIC           w1.ORIGIN_AL1,
+# MAGIC           w1.ORIGIN_AW6,
+# MAGIC           w1.ORIGIN_MW4,
+# MAGIC           w1.ORIGIN_AX6,
+# MAGIC           w1.ORIGIN_CV1,
+# MAGIC           w1.ORIGIN_ME1,
+# MAGIC           w1.ORIGIN_KC2,
+# MAGIC           w1.ORIGIN_CN1,
+# MAGIC           w1.ORIGIN_UA1,
+# MAGIC           w1.ORIGIN_GD5,
+# MAGIC           w1.ORIGIN_UG2,
+# MAGIC           w1.ORIGIN_AT3,
+# MAGIC           w1.ORIGIN_AT4,
+# MAGIC           w1.ORIGIN_GJ1,
+# MAGIC           w1.ORIGIN_MV1,
+# MAGIC           w1.ORIGIN_GA5,
+# MAGIC           w1.ORIGIN_CT2,
+# MAGIC           w1.ORIGIN_CG2,
+# MAGIC           w1.ORIGIN_ED1,
+# MAGIC           w1.ORIGIN_AE1,
+# MAGIC           w1.ORIGIN_CO1,
+# MAGIC           w1.ORIGIN_KE1,
+# MAGIC           w1.ORIGIN_KB1,
+# MAGIC           w1.ORIGIN_AI4,
+# MAGIC           w1.ORIGIN_MW3,
+# MAGIC           w1.ORIGIN_KG2,
+# MAGIC           w1.ORIGIN_AA2,
+# MAGIC           w1.ORIGIN_AX2,
+# MAGIC           w1.ORIGIN_AY1,
+# MAGIC           w1.ORIGIN_RH2,
+# MAGIC           w1.ORIGIN_OE2,
+# MAGIC           w1.ORIGIN_CU3,
+# MAGIC           w1.ORIGIN_MH1,
+# MAGIC           w1.ORIGIN_AM1,
+# MAGIC           w1.ORIGIN_AU4,
+# MAGIC           w1.ORIGIN_GA6,
+# MAGIC           w1.ORIGIN_KG1,
+# MAGIC           w1.ORIGIN_AU3,
+# MAGIC           w1.ORIGIN_AT7,
+# MAGIC           w1.ORIGIN_KD1,
+# MAGIC           w1.ORIGIN_GL1,
+# MAGIC           w1.ORIGIN_IA1,
+# MAGIC           w1.ORIGIN_GG2,
+# MAGIC           w1.ORIGIN_OD3,
+# MAGIC           w1.ORIGIN_UG1,
+# MAGIC           w1.ORIGIN_CB1,
+# MAGIC           w1.ORIGIN_AI6,
+# MAGIC           w1.ORIGIN_CI1,
+# MAGIC           w1.ORIGIN_CV2,
+# MAGIC           w1.ORIGIN_AZ2,
+# MAGIC           w1.ORIGIN_AD1,
+# MAGIC           w1.ORIGIN_AH1,
+# MAGIC           w1.ORIGIN_WD1,
+# MAGIC           w1.ORIGIN_AA4,
+# MAGIC           w1.ORIGIN_KC1,
+# MAGIC           w1.ORIGIN_IA2,
+# MAGIC           w1.ORIGIN_CF3,
+# MAGIC           w1.ORIGIN_AI2,
+# MAGIC           w1.ORIGIN_AT1,
+# MAGIC           w1.ORIGIN_GD4,
+# MAGIC           w1.ORIGIN_AX3,
+# MAGIC           w1.ORIGIN_AH4,
+# MAGIC           w1.ORIGIN_KB3,
+# MAGIC           w1.ORIGIN_CU1,
+# MAGIC           w1.ORIGIN_CN4,
+# MAGIC           w1.ORIGIN_AT2,
+# MAGIC           w1.ORIGIN_CG1,
+# MAGIC           w1.ORIGIN_CF1,
+# MAGIC           w1.ORIGIN_GG1,
+# MAGIC           w1.ORIGIN_MV2,
+# MAGIC           w1.ORIGIN_CW1,
+# MAGIC           w1.ORIGIN_GG4,
+# MAGIC           w1.ORIGIN_AB1,
+# MAGIC           w1.ORIGIN_AH5,
+# MAGIC           w1.ORIGIN_CN3,
+# MAGIC           w1.ORIGIN_WEATHER_DATE
+# MAGIC                      FROM flights_processed fp JOIN (
+# MAGIC                                             SELECT  w.ORIGIN_WEATHER_STATION,
+# MAGIC                                                     w.ORIGIN_WEATHER_TIMESTAMP,
+# MAGIC                                                     w.ORIGIN_WEATHER_SOURCE,
+# MAGIC                                                     w.ORIGIN_WEATHER_LAT,
+# MAGIC                                                     w.ORIGIN_WEATHER_LON,
+# MAGIC                                                     w.ORIGIN_WEATHER_ELEV,
+# MAGIC                                                     w.ORIGIN_WEATHER_NAME,
+# MAGIC                                                     w.ORIGIN_WEATHER_REPORT_TYPE,
+# MAGIC                                                     w.ORIGIN_WEATHER_CALL_SIGN,
+# MAGIC                                                     w.ORIGIN_QUALITY_CONTROL,
+# MAGIC                                                     w.ORIGIN_WND,
+# MAGIC                                                     w.ORIGIN_CIG,
+# MAGIC                                                     w.ORIGIN_VIS,
+# MAGIC                                                     w.ORIGIN_TMP,
+# MAGIC                                                     w.ORIGIN_DEW,
+# MAGIC                                                     w.ORIGIN_SLP,
+# MAGIC                                                     w.ORIGIN_AW1,
+# MAGIC                                                     w.ORIGIN_GA1,
+# MAGIC                                                     w.ORIGIN_GA2,
+# MAGIC                                                     w.ORIGIN_GA3,
+# MAGIC                                                     w.ORIGIN_GA4,
+# MAGIC                                                     w.ORIGIN_GE1,
+# MAGIC                                                     w.ORIGIN_GF1,
+# MAGIC                                                     w.ORIGIN_KA1,
+# MAGIC                                                     w.ORIGIN_KA2,
+# MAGIC                                                     w.ORIGIN_MA1,
+# MAGIC                                                     w.ORIGIN_MD1,
+# MAGIC                                                     w.ORIGIN_MW1,
+# MAGIC                                                     w.ORIGIN_MW2,
+# MAGIC                                                     w.ORIGIN_OC1,
+# MAGIC                                                     w.ORIGIN_OD1,
+# MAGIC                                                     w.ORIGIN_OD2,
+# MAGIC                                                     w.ORIGIN_REM,
+# MAGIC                                                     w.ORIGIN_EQD,
+# MAGIC                                                     w.ORIGIN_AW2,
+# MAGIC                                                     w.ORIGIN_AX4,
+# MAGIC                                                     w.ORIGIN_GD1,
+# MAGIC                                                     w.ORIGIN_AW5,
+# MAGIC                                                     w.ORIGIN_GN1,
+# MAGIC                                                     w.ORIGIN_AJ1,
+# MAGIC                                                     w.ORIGIN_AW3,
+# MAGIC                                                     w.ORIGIN_MK1,
+# MAGIC                                                     w.ORIGIN_KA4,
+# MAGIC                                                     w.ORIGIN_GG3,
+# MAGIC                                                     w.ORIGIN_AN1,
+# MAGIC                                                     w.ORIGIN_RH1,
+# MAGIC                                                     w.ORIGIN_AU5,
+# MAGIC                                                     w.ORIGIN_HL1,
+# MAGIC                                                     w.ORIGIN_OB1,
+# MAGIC                                                     w.ORIGIN_AT8,
+# MAGIC                                                     w.ORIGIN_AW7,
+# MAGIC                                                     w.ORIGIN_AZ1,
+# MAGIC                                                     w.ORIGIN_CH1,
+# MAGIC                                                     w.ORIGIN_RH3,
+# MAGIC                                                     w.ORIGIN_GK1,
+# MAGIC                                                     w.ORIGIN_IB1,
+# MAGIC                                                     w.ORIGIN_AX1,
+# MAGIC                                                     w.ORIGIN_CT1,
+# MAGIC                                                     w.ORIGIN_AK1,
+# MAGIC                                                     w.ORIGIN_CN2,
+# MAGIC                                                     w.ORIGIN_OE1,
+# MAGIC                                                     w.ORIGIN_MW5,
+# MAGIC                                                     w.ORIGIN_AO1,
+# MAGIC                                                     w.ORIGIN_KA3,
+# MAGIC                                                     w.ORIGIN_AA3,
+# MAGIC                                                     w.ORIGIN_CR1,
+# MAGIC                                                     w.ORIGIN_CF2,
+# MAGIC                                                     w.ORIGIN_KB2,
+# MAGIC                                                     w.ORIGIN_GM1,
+# MAGIC                                                     w.ORIGIN_AT5,
+# MAGIC                                                     w.ORIGIN_AY2,
+# MAGIC                                                     w.ORIGIN_MW6,
+# MAGIC                                                     w.ORIGIN_MG1,
+# MAGIC                                                     w.ORIGIN_AH6,
+# MAGIC                                                     w.ORIGIN_AU2,
+# MAGIC                                                     w.ORIGIN_GD2,
+# MAGIC                                                     w.ORIGIN_AW4,
+# MAGIC                                                     w.ORIGIN_MF1,
+# MAGIC                                                     w.ORIGIN_AA1,
+# MAGIC                                                     w.ORIGIN_AH2,
+# MAGIC                                                     w.ORIGIN_AH3,
+# MAGIC                                                     w.ORIGIN_OE3,
+# MAGIC                                                     w.ORIGIN_AT6,
+# MAGIC                                                     w.ORIGIN_AL2,
+# MAGIC                                                     w.ORIGIN_AL3,
+# MAGIC                                                     w.ORIGIN_AX5,
+# MAGIC                                                     w.ORIGIN_IB2,
+# MAGIC                                                     w.ORIGIN_AI3,
+# MAGIC                                                     w.ORIGIN_CV3,
+# MAGIC                                                     w.ORIGIN_WA1,
+# MAGIC                                                     w.ORIGIN_GH1,
+# MAGIC                                                     w.ORIGIN_KF1,
+# MAGIC                                                     w.ORIGIN_CU2,
+# MAGIC                                                     w.ORIGIN_CT3,
+# MAGIC                                                     w.ORIGIN_SA1,
+# MAGIC                                                     w.ORIGIN_AU1,
+# MAGIC                                                     w.ORIGIN_KD2,
+# MAGIC                                                     w.ORIGIN_AI5,
+# MAGIC                                                     w.ORIGIN_GO1,
+# MAGIC                                                     w.ORIGIN_GD3,
+# MAGIC                                                     w.ORIGIN_CG3,
+# MAGIC                                                     w.ORIGIN_AI1,
+# MAGIC                                                     w.ORIGIN_AL1,
+# MAGIC                                                     w.ORIGIN_AW6,
+# MAGIC                                                     w.ORIGIN_MW4,
+# MAGIC                                                     w.ORIGIN_AX6,
+# MAGIC                                                     w.ORIGIN_CV1,
+# MAGIC                                                     w.ORIGIN_ME1,
+# MAGIC                                                     w.ORIGIN_KC2,
+# MAGIC                                                     w.ORIGIN_CN1,
+# MAGIC                                                     w.ORIGIN_UA1,
+# MAGIC                                                     w.ORIGIN_GD5,
+# MAGIC                                                     w.ORIGIN_UG2,
+# MAGIC                                                     w.ORIGIN_AT3,
+# MAGIC                                                     w.ORIGIN_AT4,
+# MAGIC                                                     w.ORIGIN_GJ1,
+# MAGIC                                                     w.ORIGIN_MV1,
+# MAGIC                                                     w.ORIGIN_GA5,
+# MAGIC                                                     w.ORIGIN_CT2,
+# MAGIC                                                     w.ORIGIN_CG2,
+# MAGIC                                                     w.ORIGIN_ED1,
+# MAGIC                                                     w.ORIGIN_AE1,
+# MAGIC                                                     w.ORIGIN_CO1,
+# MAGIC                                                     w.ORIGIN_KE1,
+# MAGIC                                                     w.ORIGIN_KB1,
+# MAGIC                                                     w.ORIGIN_AI4,
+# MAGIC                                                     w.ORIGIN_MW3,
+# MAGIC                                                     w.ORIGIN_KG2,
+# MAGIC                                                     w.ORIGIN_AA2,
+# MAGIC                                                     w.ORIGIN_AX2,
+# MAGIC                                                     w.ORIGIN_AY1,
+# MAGIC                                                     w.ORIGIN_RH2,
+# MAGIC                                                     w.ORIGIN_OE2,
+# MAGIC                                                     w.ORIGIN_CU3,
+# MAGIC                                                     w.ORIGIN_MH1,
+# MAGIC                                                     w.ORIGIN_AM1,
+# MAGIC                                                     w.ORIGIN_AU4,
+# MAGIC                                                     w.ORIGIN_GA6,
+# MAGIC                                                     w.ORIGIN_KG1,
+# MAGIC                                                     w.ORIGIN_AU3,
+# MAGIC                                                     w.ORIGIN_AT7,
+# MAGIC                                                     w.ORIGIN_KD1,
+# MAGIC                                                     w.ORIGIN_GL1,
+# MAGIC                                                     w.ORIGIN_IA1,
+# MAGIC                                                     w.ORIGIN_GG2,
+# MAGIC                                                     w.ORIGIN_OD3,
+# MAGIC                                                     w.ORIGIN_UG1,
+# MAGIC                                                     w.ORIGIN_CB1,
+# MAGIC                                                     w.ORIGIN_AI6,
+# MAGIC                                                     w.ORIGIN_CI1,
+# MAGIC                                                     w.ORIGIN_CV2,
+# MAGIC                                                     w.ORIGIN_AZ2,
+# MAGIC                                                     w.ORIGIN_AD1,
+# MAGIC                                                     w.ORIGIN_AH1,
+# MAGIC                                                     w.ORIGIN_WD1,
+# MAGIC                                                     w.ORIGIN_AA4,
+# MAGIC                                                     w.ORIGIN_KC1,
+# MAGIC                                                     w.ORIGIN_IA2,
+# MAGIC                                                     w.ORIGIN_CF3,
+# MAGIC                                                     w.ORIGIN_AI2,
+# MAGIC                                                     w.ORIGIN_AT1,
+# MAGIC                                                     w.ORIGIN_GD4,
+# MAGIC                                                     w.ORIGIN_AX3,
+# MAGIC                                                     w.ORIGIN_AH4,
+# MAGIC                                                     w.ORIGIN_KB3,
+# MAGIC                                                     w.ORIGIN_CU1,
+# MAGIC                                                     w.ORIGIN_CN4,
+# MAGIC                                                     w.ORIGIN_AT2,
+# MAGIC                                                     w.ORIGIN_CG1,
+# MAGIC                                                     w.ORIGIN_CF1,
+# MAGIC                                                     w.ORIGIN_GG1,
+# MAGIC                                                     w.ORIGIN_MV2,
+# MAGIC                                                     w.ORIGIN_CW1,
+# MAGIC                                                     w.ORIGIN_GG4,
+# MAGIC                                                     w.ORIGIN_AB1,
+# MAGIC                                                     w.ORIGIN_AH5,
+# MAGIC                                                     w.ORIGIN_CN3,
+# MAGIC                                                     w.ORIGIN_WEATHER_DATE,
+# MAGIC                                                     w.ORIGIN_ROW_NUM
+# MAGIC                                               FROM (
+# MAGIC                                                      SELECT wp.WEATHER_STATION as ORIGIN_WEATHER_STATION,
+# MAGIC                                                             wp.WEATHER_TIMESTAMP as ORIGIN_WEATHER_TIMESTAMP,
+# MAGIC                                                             wp.WEATHER_SOURCE as ORIGIN_WEATHER_SOURCE,
+# MAGIC                                                             wp.WEATHER_LAT as ORIGIN_WEATHER_LAT,
+# MAGIC                                                             wp.WEATHER_LON as ORIGIN_WEATHER_LON,
+# MAGIC                                                             wp.WEATHER_ELEV as ORIGIN_WEATHER_ELEV,
+# MAGIC                                                             wp.WEATHER_NAME as ORIGIN_WEATHER_NAME,
+# MAGIC                                                             wp.WEATHER_REPORT_TYPE as ORIGIN_WEATHER_REPORT_TYPE,
+# MAGIC                                                             wp.WEATHER_CALL_SIGN as ORIGIN_WEATHER_CALL_SIGN,
+# MAGIC                                                             wp.QUALITY_CONTROL as ORIGIN_QUALITY_CONTROL,
+# MAGIC                                                             wp.WND as ORIGIN_WND,
+# MAGIC                                                             wp.CIG as ORIGIN_CIG,
+# MAGIC                                                             wp.VIS as ORIGIN_VIS,
+# MAGIC                                                             wp.TMP as ORIGIN_TMP,
+# MAGIC                                                             wp.DEW as ORIGIN_DEW,
+# MAGIC                                                             wp.SLP as ORIGIN_SLP,
+# MAGIC                                                             wp.AW1 as ORIGIN_AW1,
+# MAGIC                                                             wp.GA1 as ORIGIN_GA1,
+# MAGIC                                                             wp.GA2 as ORIGIN_GA2,
+# MAGIC                                                             wp.GA3 as ORIGIN_GA3,
+# MAGIC                                                             wp.GA4 as ORIGIN_GA4,
+# MAGIC                                                             wp.GE1 as ORIGIN_GE1,
+# MAGIC                                                             wp.GF1 as ORIGIN_GF1,
+# MAGIC                                                             wp.KA1 as ORIGIN_KA1,
+# MAGIC                                                             wp.KA2 as ORIGIN_KA2,
+# MAGIC                                                             wp.MA1 as ORIGIN_MA1,
+# MAGIC                                                             wp.MD1 as ORIGIN_MD1,
+# MAGIC                                                             wp.MW1 as ORIGIN_MW1,
+# MAGIC                                                             wp.MW2 as ORIGIN_MW2,
+# MAGIC                                                             wp.OC1 as ORIGIN_OC1,
+# MAGIC                                                             wp.OD1 as ORIGIN_OD1,
+# MAGIC                                                             wp.OD2 as ORIGIN_OD2,
+# MAGIC                                                             wp.REM as ORIGIN_REM,
+# MAGIC                                                             wp.EQD as ORIGIN_EQD,
+# MAGIC                                                             wp.AW2 as ORIGIN_AW2,
+# MAGIC                                                             wp.AX4 as ORIGIN_AX4,
+# MAGIC                                                             wp.GD1 as ORIGIN_GD1,
+# MAGIC                                                             wp.AW5 as ORIGIN_AW5,
+# MAGIC                                                             wp.GN1 as ORIGIN_GN1,
+# MAGIC                                                             wp.AJ1 as ORIGIN_AJ1,
+# MAGIC                                                             wp.AW3 as ORIGIN_AW3,
+# MAGIC                                                             wp.MK1 as ORIGIN_MK1,
+# MAGIC                                                             wp.KA4 as ORIGIN_KA4,
+# MAGIC                                                             wp.GG3 as ORIGIN_GG3,
+# MAGIC                                                             wp.AN1 as ORIGIN_AN1,
+# MAGIC                                                             wp.RH1 as ORIGIN_RH1,
+# MAGIC                                                             wp.AU5 as ORIGIN_AU5,
+# MAGIC                                                             wp.HL1 as ORIGIN_HL1,
+# MAGIC                                                             wp.OB1 as ORIGIN_OB1,
+# MAGIC                                                             wp.AT8 as ORIGIN_AT8,
+# MAGIC                                                             wp.AW7 as ORIGIN_AW7,
+# MAGIC                                                             wp.AZ1 as ORIGIN_AZ1,
+# MAGIC                                                             wp.CH1 as ORIGIN_CH1,
+# MAGIC                                                             wp.RH3 as ORIGIN_RH3,
+# MAGIC                                                             wp.GK1 as ORIGIN_GK1,
+# MAGIC                                                             wp.IB1 as ORIGIN_IB1,
+# MAGIC                                                             wp.AX1 as ORIGIN_AX1,
+# MAGIC                                                             wp.CT1 as ORIGIN_CT1,
+# MAGIC                                                             wp.AK1 as ORIGIN_AK1,
+# MAGIC                                                             wp.CN2 as ORIGIN_CN2,
+# MAGIC                                                             wp.OE1 as ORIGIN_OE1,
+# MAGIC                                                             wp.MW5 as ORIGIN_MW5,
+# MAGIC                                                             wp.AO1 as ORIGIN_AO1,
+# MAGIC                                                             wp.KA3 as ORIGIN_KA3,
+# MAGIC                                                             wp.AA3 as ORIGIN_AA3,
+# MAGIC                                                             wp.CR1 as ORIGIN_CR1,
+# MAGIC                                                             wp.CF2 as ORIGIN_CF2,
+# MAGIC                                                             wp.KB2 as ORIGIN_KB2,
+# MAGIC                                                             wp.GM1 as ORIGIN_GM1,
+# MAGIC                                                             wp.AT5 as ORIGIN_AT5,
+# MAGIC                                                             wp.AY2 as ORIGIN_AY2,
+# MAGIC                                                             wp.MW6 as ORIGIN_MW6,
+# MAGIC                                                             wp.MG1 as ORIGIN_MG1,
+# MAGIC                                                             wp.AH6 as ORIGIN_AH6,
+# MAGIC                                                             wp.AU2 as ORIGIN_AU2,
+# MAGIC                                                             wp.GD2 as ORIGIN_GD2,
+# MAGIC                                                             wp.AW4 as ORIGIN_AW4,
+# MAGIC                                                             wp.MF1 as ORIGIN_MF1,
+# MAGIC                                                             wp.AA1 as ORIGIN_AA1,
+# MAGIC                                                             wp.AH2 as ORIGIN_AH2,
+# MAGIC                                                             wp.AH3 as ORIGIN_AH3,
+# MAGIC                                                             wp.OE3 as ORIGIN_OE3,
+# MAGIC                                                             wp.AT6 as ORIGIN_AT6,
+# MAGIC                                                             wp.AL2 as ORIGIN_AL2,
+# MAGIC                                                             wp.AL3 as ORIGIN_AL3,
+# MAGIC                                                             wp.AX5 as ORIGIN_AX5,
+# MAGIC                                                             wp.IB2 as ORIGIN_IB2,
+# MAGIC                                                             wp.AI3 as ORIGIN_AI3,
+# MAGIC                                                             wp.CV3 as ORIGIN_CV3,
+# MAGIC                                                             wp.WA1 as ORIGIN_WA1,
+# MAGIC                                                             wp.GH1 as ORIGIN_GH1,
+# MAGIC                                                             wp.KF1 as ORIGIN_KF1,
+# MAGIC                                                             wp.CU2 as ORIGIN_CU2,
+# MAGIC                                                             wp.CT3 as ORIGIN_CT3,
+# MAGIC                                                             wp.SA1 as ORIGIN_SA1,
+# MAGIC                                                             wp.AU1 as ORIGIN_AU1,
+# MAGIC                                                             wp.KD2 as ORIGIN_KD2,
+# MAGIC                                                             wp.AI5 as ORIGIN_AI5,
+# MAGIC                                                             wp.GO1 as ORIGIN_GO1,
+# MAGIC                                                             wp.GD3 as ORIGIN_GD3,
+# MAGIC                                                             wp.CG3 as ORIGIN_CG3,
+# MAGIC                                                             wp.AI1 as ORIGIN_AI1,
+# MAGIC                                                             wp.AL1 as ORIGIN_AL1,
+# MAGIC                                                             wp.AW6 as ORIGIN_AW6,
+# MAGIC                                                             wp.MW4 as ORIGIN_MW4,
+# MAGIC                                                             wp.AX6 as ORIGIN_AX6,
+# MAGIC                                                             wp.CV1 as ORIGIN_CV1,
+# MAGIC                                                             wp.ME1 as ORIGIN_ME1,
+# MAGIC                                                             wp.KC2 as ORIGIN_KC2,
+# MAGIC                                                             wp.CN1 as ORIGIN_CN1,
+# MAGIC                                                             wp.UA1 as ORIGIN_UA1,
+# MAGIC                                                             wp.GD5 as ORIGIN_GD5,
+# MAGIC                                                             wp.UG2 as ORIGIN_UG2,
+# MAGIC                                                             wp.AT3 as ORIGIN_AT3,
+# MAGIC                                                             wp.AT4 as ORIGIN_AT4,
+# MAGIC                                                             wp.GJ1 as ORIGIN_GJ1,
+# MAGIC                                                             wp.MV1 as ORIGIN_MV1,
+# MAGIC                                                             wp.GA5 as ORIGIN_GA5,
+# MAGIC                                                             wp.CT2 as ORIGIN_CT2,
+# MAGIC                                                             wp.CG2 as ORIGIN_CG2,
+# MAGIC                                                             wp.ED1 as ORIGIN_ED1,
+# MAGIC                                                             wp.AE1 as ORIGIN_AE1,
+# MAGIC                                                             wp.CO1 as ORIGIN_CO1,
+# MAGIC                                                             wp.KE1 as ORIGIN_KE1,
+# MAGIC                                                             wp.KB1 as ORIGIN_KB1,
+# MAGIC                                                             wp.AI4 as ORIGIN_AI4,
+# MAGIC                                                             wp.MW3 as ORIGIN_MW3,
+# MAGIC                                                             wp.KG2 as ORIGIN_KG2,
+# MAGIC                                                             wp.AA2 as ORIGIN_AA2,
+# MAGIC                                                             wp.AX2 as ORIGIN_AX2,
+# MAGIC                                                             wp.AY1 as ORIGIN_AY1,
+# MAGIC                                                             wp.RH2 as ORIGIN_RH2,
+# MAGIC                                                             wp.OE2 as ORIGIN_OE2,
+# MAGIC                                                             wp.CU3 as ORIGIN_CU3,
+# MAGIC                                                             wp.MH1 as ORIGIN_MH1,
+# MAGIC                                                             wp.AM1 as ORIGIN_AM1,
+# MAGIC                                                             wp.AU4 as ORIGIN_AU4,
+# MAGIC                                                             wp.GA6 as ORIGIN_GA6,
+# MAGIC                                                             wp.KG1 as ORIGIN_KG1,
+# MAGIC                                                             wp.AU3 as ORIGIN_AU3,
+# MAGIC                                                             wp.AT7 as ORIGIN_AT7,
+# MAGIC                                                             wp.KD1 as ORIGIN_KD1,
+# MAGIC                                                             wp.GL1 as ORIGIN_GL1,
+# MAGIC                                                             wp.IA1 as ORIGIN_IA1,
+# MAGIC                                                             wp.GG2 as ORIGIN_GG2,
+# MAGIC                                                             wp.OD3 as ORIGIN_OD3,
+# MAGIC                                                             wp.UG1 as ORIGIN_UG1,
+# MAGIC                                                             wp.CB1 as ORIGIN_CB1,
+# MAGIC                                                             wp.AI6 as ORIGIN_AI6,
+# MAGIC                                                             wp.CI1 as ORIGIN_CI1,
+# MAGIC                                                             wp.CV2 as ORIGIN_CV2,
+# MAGIC                                                             wp.AZ2 as ORIGIN_AZ2,
+# MAGIC                                                             wp.AD1 as ORIGIN_AD1,
+# MAGIC                                                             wp.AH1 as ORIGIN_AH1,
+# MAGIC                                                             wp.WD1 as ORIGIN_WD1,
+# MAGIC                                                             wp.AA4 as ORIGIN_AA4,
+# MAGIC                                                             wp.KC1 as ORIGIN_KC1,
+# MAGIC                                                             wp.IA2 as ORIGIN_IA2,
+# MAGIC                                                             wp.CF3 as ORIGIN_CF3,
+# MAGIC                                                             wp.AI2 as ORIGIN_AI2,
+# MAGIC                                                             wp.AT1 as ORIGIN_AT1,
+# MAGIC                                                             wp.GD4 as ORIGIN_GD4,
+# MAGIC                                                             wp.AX3 as ORIGIN_AX3,
+# MAGIC                                                             wp.AH4 as ORIGIN_AH4,
+# MAGIC                                                             wp.KB3 as ORIGIN_KB3,
+# MAGIC                                                             wp.CU1 as ORIGIN_CU1,
+# MAGIC                                                             wp.CN4 as ORIGIN_CN4,
+# MAGIC                                                             wp.AT2 as ORIGIN_AT2,
+# MAGIC                                                             wp.CG1 as ORIGIN_CG1,
+# MAGIC                                                             wp.CF1 as ORIGIN_CF1,
+# MAGIC                                                             wp.GG1 as ORIGIN_GG1,
+# MAGIC                                                             wp.MV2 as ORIGIN_MV2,
+# MAGIC                                                             wp.CW1 as ORIGIN_CW1,
+# MAGIC                                                             wp.GG4 as ORIGIN_GG4,
+# MAGIC                                                             wp.AB1 as ORIGIN_AB1,
+# MAGIC                                                             wp.AH5 as ORIGIN_AH5,
+# MAGIC                                                             wp.CN3 as ORIGIN_CN3,
+# MAGIC                                                             wp.WEATHER_DATE as ORIGIN_WEATHER_DATE,
+# MAGIC                                                             ROW_NUMBER() OVER ( 
+# MAGIC                                                                                     partition by wp.WEATHER_KEY 
+# MAGIC                                                                                     ORDER BY wp.WEATHER_DATE ASC 
+# MAGIC                                                                               ) as ORIGIN_ROW_NUM 
+# MAGIC                                                     FROM weather_processed wp
+# MAGIC                                                 ) as w
+# MAGIC                                                 WHERE w.ORIGIN_ROW_NUM = 1 
+# MAGIC                                             ) as w1
+# MAGIC                                            ON fp.ORIGIN_WEATHER_KEY = w1.WEATHER_KEY
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC CREATE TABLE flights_and_weather_origin
+# MAGIC USING DELTA
+# MAGIC LOCATION '/airline_delays/$username/DLRS/flights_and_weather_origin/processed'
+# MAGIC AS SELECT *
+# MAGIC                      FROM flights_processed fp JOIN (
+# MAGIC                                             SELECT  *
+# MAGIC                                               FROM (
+# MAGIC                                                      SELECT *,
+# MAGIC                                                             ROW_NUMBER() OVER ( 
+# MAGIC                                                                                     partition by wp.WEATHER_KEY 
+# MAGIC                                                                                     ORDER BY wp.WEATHER_DATE ASC 
+# MAGIC                                                                               ) as ORIGIN_ROW_NUM 
+# MAGIC                                                     FROM weather_processed wp
+# MAGIC                                                 ) as w
+# MAGIC                                                 WHERE w.ORIGIN_ROW_NUM = 1 
+# MAGIC                                             ) as w1
+# MAGIC                                            ON fp.ORIGIN_WEATHER_KEY = w1.WEATHER_KEY
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC CREATE TABLE flights_and_weather_dest
+# MAGIC USING DELTA
+# MAGIC LOCATION '/airline_delays/$username/DLRS/flights_and_weather_dest/processed'
+# MAGIC AS SELECT * FROM flights_and_weather_origin fp JOIN (
+# MAGIC                                                         SELECT  w.WEATHER_STATION as DEST_WEATHER_STATION,
+# MAGIC                                                             w.WEATHER_TIMESTAMP as DEST_WEATHER_TIMESTAMP,
+# MAGIC                                                             w.WEATHER_SOURCE as DEST_WEATHER_SOURCE,
+# MAGIC                                                             w.WEATHER_LAT as DEST_WEATHER_LAT,
+# MAGIC                                                             w.WEATHER_LON as DEST_WEATHER_LON,
+# MAGIC                                                             w.WEATHER_ELEV as DEST_WEATHER_ELEV,
+# MAGIC                                                             w.WEATHER_NAME as DEST_WEATHER_NAME,
+# MAGIC                                                             w.WEATHER_REPORT_TYPE as DEST_WEATHER_REPORT_TYPE,
+# MAGIC                                                             w.WEATHER_CALL_SIGN as DEST_WEATHER_CALL_SIGN,
+# MAGIC                                                             w.QUALITY_CONTROL as DEST_QUALITY_CONTROL,
+# MAGIC                                                             w.WND as DEST_WND,
+# MAGIC                                                             w.CIG as DEST_CIG,
+# MAGIC                                                             w.VIS as DEST_VIS,
+# MAGIC                                                             w.TMP as DEST_TMP,
+# MAGIC                                                             w.DEW as DEST_DEW,
+# MAGIC                                                             w.SLP as DEST_SLP,
+# MAGIC                                                             w.AW1 as DEST_AW1,
+# MAGIC                                                             w.GA1 as DEST_GA1,
+# MAGIC                                                             w.GA2 as DEST_GA2,
+# MAGIC                                                             w.GA3 as DEST_GA3,
+# MAGIC                                                             w.GA4 as DEST_GA4,
+# MAGIC                                                             w.GE1 as DEST_GE1,
+# MAGIC                                                             w.GF1 as DEST_GF1,
+# MAGIC                                                             w.KA1 as DEST_KA1,
+# MAGIC                                                             w.KA2 as DEST_KA2,
+# MAGIC                                                             w.MA1 as DEST_MA1,
+# MAGIC                                                             w.MD1 as DEST_MD1,
+# MAGIC                                                             w.MW1 as DEST_MW1,
+# MAGIC                                                             w.MW2 as DEST_MW2,
+# MAGIC                                                             w.OC1 as DEST_OC1,
+# MAGIC                                                             w.OD1 as DEST_OD1,
+# MAGIC                                                             w.OD2 as DEST_OD2,
+# MAGIC                                                             w.REM as DEST_REM,
+# MAGIC                                                             w.EQD as DEST_EQD,
+# MAGIC                                                             w.AW2 as DEST_AW2,
+# MAGIC                                                             w.AX4 as DEST_AX4,
+# MAGIC                                                             w.GD1 as DEST_GD1,
+# MAGIC                                                             w.AW5 as DEST_AW5,
+# MAGIC                                                             w.GN1 as DEST_GN1,
+# MAGIC                                                             w.AJ1 as DEST_AJ1,
+# MAGIC                                                             w.AW3 as DEST_AW3,
+# MAGIC                                                             w.MK1 as DEST_MK1,
+# MAGIC                                                             w.KA4 as DEST_KA4,
+# MAGIC                                                             w.GG3 as DEST_GG3,
+# MAGIC                                                             w.AN1 as DEST_AN1,
+# MAGIC                                                             w.RH1 as DEST_RH1,
+# MAGIC                                                             w.AU5 as DEST_AU5,
+# MAGIC                                                             w.HL1 as DEST_HL1,
+# MAGIC                                                             w.OB1 as DEST_OB1,
+# MAGIC                                                             w.AT8 as DEST_AT8,
+# MAGIC                                                             w.AW7 as DEST_AW7,
+# MAGIC                                                             w.AZ1 as DEST_AZ1,
+# MAGIC                                                             w.CH1 as DEST_CH1,
+# MAGIC                                                             w.RH3 as DEST_RH3,
+# MAGIC                                                             w.GK1 as DEST_GK1,
+# MAGIC                                                             w.IB1 as DEST_IB1,
+# MAGIC                                                             w.AX1 as DEST_AX1,
+# MAGIC                                                             w.CT1 as DEST_CT1,
+# MAGIC                                                             w.AK1 as DEST_AK1,
+# MAGIC                                                             w.CN2 as DEST_CN2,
+# MAGIC                                                             w.OE1 as DEST_OE1,
+# MAGIC                                                             w.MW5 as DEST_MW5,
+# MAGIC                                                             w.AO1 as DEST_AO1,
+# MAGIC                                                             w.KA3 as DEST_KA3,
+# MAGIC                                                             w.AA3 as DEST_AA3,
+# MAGIC                                                             w.CR1 as DEST_CR1,
+# MAGIC                                                             w.CF2 as DEST_CF2,
+# MAGIC                                                             w.KB2 as DEST_KB2,
+# MAGIC                                                             w.GM1 as DEST_GM1,
+# MAGIC                                                             w.AT5 as DEST_AT5,
+# MAGIC                                                             w.AY2 as DEST_AY2,
+# MAGIC                                                             w.MW6 as DEST_MW6,
+# MAGIC                                                             w.MG1 as DEST_MG1,
+# MAGIC                                                             w.AH6 as DEST_AH6,
+# MAGIC                                                             w.AU2 as DEST_AU2,
+# MAGIC                                                             w.GD2 as DEST_GD2,
+# MAGIC                                                             w.AW4 as DEST_AW4,
+# MAGIC                                                             w.MF1 as DEST_MF1,
+# MAGIC                                                             w.AA1 as DEST_AA1,
+# MAGIC                                                             w.AH2 as DEST_AH2,
+# MAGIC                                                             w.AH3 as DEST_AH3,
+# MAGIC                                                             w.OE3 as DEST_OE3,
+# MAGIC                                                             w.AT6 as DEST_AT6,
+# MAGIC                                                             w.AL2 as DEST_AL2,
+# MAGIC                                                             w.AL3 as DEST_AL3,
+# MAGIC                                                             w.AX5 as DEST_AX5,
+# MAGIC                                                             w.IB2 as DEST_IB2,
+# MAGIC                                                             w.AI3 as DEST_AI3,
+# MAGIC                                                             w.CV3 as DEST_CV3,
+# MAGIC                                                             w.WA1 as DEST_WA1,
+# MAGIC                                                             w.GH1 as DEST_GH1,
+# MAGIC                                                             w.KF1 as DEST_KF1,
+# MAGIC                                                             w.CU2 as DEST_CU2,
+# MAGIC                                                             w.CT3 as DEST_CT3,
+# MAGIC                                                             w.SA1 as DEST_SA1,
+# MAGIC                                                             w.AU1 as DEST_AU1,
+# MAGIC                                                             w.KD2 as DEST_KD2,
+# MAGIC                                                             w.AI5 as DEST_AI5,
+# MAGIC                                                             w.GO1 as DEST_GO1,
+# MAGIC                                                             w.GD3 as DEST_GD3,
+# MAGIC                                                             w.CG3 as DEST_CG3,
+# MAGIC                                                             w.AI1 as DEST_AI1,
+# MAGIC                                                             w.AL1 as DEST_AL1,
+# MAGIC                                                             w.AW6 as DEST_AW6,
+# MAGIC                                                             w.MW4 as DEST_MW4,
+# MAGIC                                                             w.AX6 as DEST_AX6,
+# MAGIC                                                             w.CV1 as DEST_CV1,
+# MAGIC                                                             w.ME1 as DEST_ME1,
+# MAGIC                                                             w.KC2 as DEST_KC2,
+# MAGIC                                                             w.CN1 as DEST_CN1,
+# MAGIC                                                             w.UA1 as DEST_UA1,
+# MAGIC                                                             w.GD5 as DEST_GD5,
+# MAGIC                                                             w.UG2 as DEST_UG2,
+# MAGIC                                                             w.AT3 as DEST_AT3,
+# MAGIC                                                             w.AT4 as DEST_AT4,
+# MAGIC                                                             w.GJ1 as DEST_GJ1,
+# MAGIC                                                             w.MV1 as DEST_MV1,
+# MAGIC                                                             w.GA5 as DEST_GA5,
+# MAGIC                                                             w.CT2 as DEST_CT2,
+# MAGIC                                                             w.CG2 as DEST_CG2,
+# MAGIC                                                             w.ED1 as DEST_ED1,
+# MAGIC                                                             w.AE1 as DEST_AE1,
+# MAGIC                                                             w.CO1 as DEST_CO1,
+# MAGIC                                                             w.KE1 as DEST_KE1,
+# MAGIC                                                             w.KB1 as DEST_KB1,
+# MAGIC                                                             w.AI4 as DEST_AI4,
+# MAGIC                                                             w.MW3 as DEST_MW3,
+# MAGIC                                                             w.KG2 as DEST_KG2,
+# MAGIC                                                             w.AA2 as DEST_AA2,
+# MAGIC                                                             w.AX2 as DEST_AX2,
+# MAGIC                                                             w.AY1 as DEST_AY1,
+# MAGIC                                                             w.RH2 as DEST_RH2,
+# MAGIC                                                             w.OE2 as DEST_OE2,
+# MAGIC                                                             w.CU3 as DEST_CU3,
+# MAGIC                                                             w.MH1 as DEST_MH1,
+# MAGIC                                                             w.AM1 as DEST_AM1,
+# MAGIC                                                             w.AU4 as DEST_AU4,
+# MAGIC                                                             w.GA6 as DEST_GA6,
+# MAGIC                                                             w.KG1 as DEST_KG1,
+# MAGIC                                                             w.AU3 as DEST_AU3,
+# MAGIC                                                             w.AT7 as DEST_AT7,
+# MAGIC                                                             w.KD1 as DEST_KD1,
+# MAGIC                                                             w.GL1 as DEST_GL1,
+# MAGIC                                                             w.IA1 as DEST_IA1,
+# MAGIC                                                             w.GG2 as DEST_GG2,
+# MAGIC                                                             w.OD3 as DEST_OD3,
+# MAGIC                                                             w.UG1 as DEST_UG1,
+# MAGIC                                                             w.CB1 as DEST_CB1,
+# MAGIC                                                             w.AI6 as DEST_AI6,
+# MAGIC                                                             w.CI1 as DEST_CI1,
+# MAGIC                                                             w.CV2 as DEST_CV2,
+# MAGIC                                                             w.AZ2 as DEST_AZ2,
+# MAGIC                                                             w.AD1 as DEST_AD1,
+# MAGIC                                                             w.AH1 as DEST_AH1,
+# MAGIC                                                             w.WD1 as DEST_WD1,
+# MAGIC                                                             w.AA4 as DEST_AA4,
+# MAGIC                                                             w.KC1 as DEST_KC1,
+# MAGIC                                                             w.IA2 as DEST_IA2,
+# MAGIC                                                             w.CF3 as DEST_CF3,
+# MAGIC                                                             w.AI2 as DEST_AI2,
+# MAGIC                                                             w.AT1 as DEST_AT1,
+# MAGIC                                                             w.GD4 as DEST_GD4,
+# MAGIC                                                             w.AX3 as DEST_AX3,
+# MAGIC                                                             w.AH4 as DEST_AH4,
+# MAGIC                                                             w.KB3 as DEST_KB3,
+# MAGIC                                                             w.CU1 as DEST_CU1,
+# MAGIC                                                             w.CN4 as DEST_CN4,
+# MAGIC                                                             w.AT2 as DEST_AT2,
+# MAGIC                                                             w.CG1 as DEST_CG1,
+# MAGIC                                                             w.CF1 as DEST_CF1,
+# MAGIC                                                             w.GG1 as DEST_GG1,
+# MAGIC                                                             w.MV2 as DEST_MV2,
+# MAGIC                                                             w.CW1 as DEST_CW1,
+# MAGIC                                                             w.GG4 as DEST_GG4,
+# MAGIC                                                             w.AB1 as DEST_AB1,
+# MAGIC                                                             w.AH5 as DEST_AH5,
+# MAGIC                                                             w.CN3 as DEST_CN3,
+# MAGIC                                                             w.WEATHER_DATE as DEST_WEATHER_DATE,
+# MAGIC                                                             w.DEST_ROW_NUM
 # MAGIC                                                           FROM (
-# MAGIC                                                                 SELECT *, ROW_NUMBER() OVER ( 
-# MAGIC                                                                       partition by WEATHER1_WEATHER_KEY 
-# MAGIC                                                                       ORDER BY WEATHER1_WEATHER_DATE ASC 
-# MAGIC                                                                 ) as w2_row_num 
-# MAGIC                                                                 FROM weather_processed 
-# MAGIC                                                             ) as w
-# MAGIC                                                             WHERE w.w2_row_num = 1 
-# MAGIC                                                         ) as w2
-# MAGIC                                                        ON fp.DEST_WEATHER_KEY = w2.WEATHER2_WEATHER_KEY
+# MAGIC                                                                 SELECT *,  ROW_NUMBER() OVER ( 
+# MAGIC                                                                                     partition by wp.WEATHER_KEY 
+# MAGIC                                                                                     ORDER BY wp.WEATHER_DATE ASC 
+# MAGIC                                                                               ) as DEST_ROW_NUM 
+# MAGIC                                                                   FROM weather_processed wp
+# MAGIC                                                               ) as w
+# MAGIC                                                               WHERE w.DEST_ROW_NUM = 1 
+# MAGIC                                                           ) as w1
+# MAGIC                                                          ON fp.DEST_WEATHER_KEY = w1.WEATHER_KEY
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC CREATE TABLE flights_and_weather_combined
+# MAGIC USING DELTA
+# MAGIC LOCATION '/airline_delays/$username/DLRS/flights_and_weather_combined/processed'
+# MAGIC AS SELECT fp.YEAR,
+# MAGIC           fp.QUARTER,
+# MAGIC           fp.MONTH,
+# MAGIC           fp.DAY_OF_MONTH,
+# MAGIC           fp.DAY_OF_WEEK,
+# MAGIC           fp.OP_UNIQUE_CARRIER,
+# MAGIC           fp.OP_CARRIER_AIRLINE_ID,
+# MAGIC           fp.OP_CARRIER,
+# MAGIC           fp.TAIL_NUM,
+# MAGIC           fp.OP_CARRIER_FL_NUM,
+# MAGIC           fp.ORIGIN_AIRPORT_ID,
+# MAGIC           fp.ORIGIN_AIRPORT_SEQ_ID,
+# MAGIC           fp.ORIGIN_CITY_MARKET_ID,
+# MAGIC           fp.ORIGIN,
+# MAGIC           fp.ORIGIN_CITY_NAME,
+# MAGIC           fp.ORIGIN_STATE_ABR,
+# MAGIC           fp.ORIGIN_STATE_FIPS,
+# MAGIC           fp.ORIGIN_STATE_NM,
+# MAGIC           fp.ORIGIN_WAC,
+# MAGIC           fp.DEST_AIRPORT_ID,
+# MAGIC           fp.DEST_AIRPORT_SEQ_ID,
+# MAGIC           fp.DEST_CITY_MARKET_ID,
+# MAGIC           fp.DEST,
+# MAGIC           fp.DEST_CITY_NAME,
+# MAGIC           fp.DEST_STATE_ABR,
+# MAGIC           fp.DEST_STATE_FIPS,
+# MAGIC           fp.DEST_STATE_NM,
+# MAGIC           fp.DEST_WAC,
+# MAGIC           fp.CRS_DEP_TIME,
+# MAGIC           fp.DEP_TIME,
+# MAGIC           fp.DEP_DELAY,
+# MAGIC           fp.DEP_DELAY_NEW,
+# MAGIC           fp.DEP_DEL15,
+# MAGIC           fp.DEP_DELAY_GROUP,
+# MAGIC           fp.DEP_TIME_BLK,
+# MAGIC           fp.TAXI_OUT,
+# MAGIC           fp.WHEELS_OFF,
+# MAGIC           fp.WHEELS_ON,
+# MAGIC           fp.TAXI_IN,
+# MAGIC           fp.CRS_ARR_TIME,
+# MAGIC           fp.ARR_TIME,
+# MAGIC           fp.ARR_DELAY,
+# MAGIC           fp.ARR_DELAY_NEW,
+# MAGIC           fp.ARR_DEL15,
+# MAGIC           fp.ARR_DELAY_GROUP,
+# MAGIC           fp.ARR_TIME_BLK,
+# MAGIC           fp.CANCELLED,
+# MAGIC           fp.CANCELLATION_CODE,
+# MAGIC           fp.DIVERTED,
+# MAGIC           fp.CRS_ELAPSED_TIME,
+# MAGIC           fp.ACTUAL_ELAPSED_TIME,
+# MAGIC           fp.AIR_TIME,
+# MAGIC           fp.FLIGHTS,
+# MAGIC           fp.DISTANCE,
+# MAGIC           fp.DISTANCE_GROUP,
+# MAGIC           fp.CARRIER_DELAY,
+# MAGIC           fp.WEATHER_DELAY,
+# MAGIC           fp.NAS_DELAY,
+# MAGIC           fp.SECURITY_DELAY,
+# MAGIC           fp.LATE_AIRCRAFT_DELAY,
+# MAGIC           fp.FIRST_DEP_TIME,
+# MAGIC           fp.TOTAL_ADD_GTIME,
+# MAGIC           fp.LONGEST_ADD_GTIME,
+# MAGIC           fp.DIV_AIRPORT_LANDINGS,
+# MAGIC           fp.DIV_REACHED_DEST,
+# MAGIC           fp.DIV_ACTUAL_ELAPSED_TIME,
+# MAGIC           fp.DIV_ARR_DELAY,
+# MAGIC           fp.DIV_DISTANCE,
+# MAGIC           fp.DIV1_AIRPORT,
+# MAGIC           fp.DIV1_AIRPORT_ID,
+# MAGIC           fp.DIV1_AIRPORT_SEQ_ID,
+# MAGIC           fp.DIV1_WHEELS_ON,
+# MAGIC           fp.DIV1_TOTAL_GTIME,
+# MAGIC           fp.DIV1_LONGEST_GTIME,
+# MAGIC           fp.DIV1_WHEELS_OFF,
+# MAGIC           fp.DIV1_TAIL_NUM,
+# MAGIC           fp.DIV2_AIRPORT,
+# MAGIC           fp.DIV2_AIRPORT_ID,
+# MAGIC           fp.DIV2_AIRPORT_SEQ_ID,
+# MAGIC           fp.DIV2_WHEELS_ON,
+# MAGIC           fp.DIV2_TOTAL_GTIME,
+# MAGIC           fp.DIV2_LONGEST_GTIME,
+# MAGIC           fp.DIV2_WHEELS_OFF,
+# MAGIC           fp.DIV2_TAIL_NUM,
+# MAGIC           fp.DIV3_AIRPORT,
+# MAGIC           fp.DIV3_AIRPORT_ID,
+# MAGIC           fp.DIV3_AIRPORT_SEQ_ID,
+# MAGIC           fp.DIV3_WHEELS_ON,
+# MAGIC           fp.DIV3_TOTAL_GTIME,
+# MAGIC           fp.DIV3_LONGEST_GTIME,
+# MAGIC           fp.DIV3_WHEELS_OFF,
+# MAGIC           fp.DIV3_TAIL_NUM,
+# MAGIC           fp.DIV4_AIRPORT,
+# MAGIC           fp.DIV4_AIRPORT_ID,
+# MAGIC           fp.DIV4_AIRPORT_SEQ_ID,
+# MAGIC           fp.DIV4_WHEELS_ON,
+# MAGIC           fp.DIV4_TOTAL_GTIME,
+# MAGIC           fp.DIV4_LONGEST_GTIME,
+# MAGIC           fp.DIV4_WHEELS_OFF,
+# MAGIC           fp.DIV4_TAIL_NUM,
+# MAGIC           fp.DIV5_AIRPORT,
+# MAGIC           fp.DIV5_AIRPORT_ID,
+# MAGIC           fp.DIV5_AIRPORT_SEQ_ID,
+# MAGIC           fp.DIV5_WHEELS_ON,
+# MAGIC           fp.DIV5_TOTAL_GTIME,
+# MAGIC           fp.DIV5_LONGEST_GTIME,
+# MAGIC           fp.DIV5_WHEELS_OFF,
+# MAGIC           fp.DIV5_TAIL_NUM,
+# MAGIC           fp.IN_FLIGHT_AIR_DELAY,
+# MAGIC           fp.FL_DATE,
+# MAGIC           fp.IATA_ORIGIN,
+# MAGIC           fp.NEAREST_STATION_ID_ORIGIN,
+# MAGIC           fp.NEAREST_STATION_DIST_ORIGIN,
+# MAGIC           fp.IATA_DEST,
+# MAGIC           fp.NEAREST_STATION_ID_DEST,
+# MAGIC           fp.NEAREST_STATION_DIST_DEST,
+# MAGIC           fp.IATA,
+# MAGIC           fp.AIRPORT_TZ_NAME,
+# MAGIC           fp.CRS_DEP_TIME_HOUR,
+# MAGIC           fp.FLIGHT_TIME_UTC,
+# MAGIC           fp.WEATHER_PREDICTION_TIME_UTC,
+# MAGIC           fp.ORIGIN_WEATHER_KEY,
+# MAGIC           fp.WEATHER_STATION as ORIGIN_WEATHER_STATION,
+# MAGIC           fp.WEATHER_TIMESTAMP as ORIGIN_WEATHER_TIMESTAMP,
+# MAGIC           fp.WEATHER_SOURCE as ORIGIN_WEATHER_SOURCE,
+# MAGIC           fp.WEATHER_LAT as ORIGIN_WEATHER_LAT,
+# MAGIC           fp.WEATHER_LON as ORIGIN_WEATHER_LON,
+# MAGIC           fp.WEATHER_ELEV as ORIGIN_WEATHER_ELEV,
+# MAGIC           fp.WEATHER_NAME as ORIGIN_WEATHER_NAME,
+# MAGIC           fp.WEATHER_REPORT_TYPE as ORIGIN_WEATHER_REPORT_TYPE,
+# MAGIC           fp.WEATHER_CALL_SIGN as ORIGIN_WEATHER_CALL_SIGN,
+# MAGIC           fp.QUALITY_CONTROL as ORIGIN_QUALITY_CONTROL,
+# MAGIC           fp.WND as ORIGIN_WND,
+# MAGIC           fp.CIG as ORIGIN_CIG,
+# MAGIC           fp.VIS as ORIGIN_VIS,
+# MAGIC           fp.TMP as ORIGIN_TMP,
+# MAGIC           fp.DEW as ORIGIN_DEW,
+# MAGIC           fp.SLP as ORIGIN_SLP,
+# MAGIC           fp.AW1 as ORIGIN_AW1,
+# MAGIC           fp.GA1 as ORIGIN_GA1,
+# MAGIC           fp.GA2 as ORIGIN_GA2,
+# MAGIC           fp.GA3 as ORIGIN_GA3,
+# MAGIC           fp.GA4 as ORIGIN_GA4,
+# MAGIC           fp.GE1 as ORIGIN_GE1,
+# MAGIC           fp.GF1 as ORIGIN_GF1,
+# MAGIC           fp.KA1 as ORIGIN_KA1,
+# MAGIC           fp.KA2 as ORIGIN_KA2,
+# MAGIC           fp.MA1 as ORIGIN_MA1,
+# MAGIC           fp.MD1 as ORIGIN_MD1,
+# MAGIC           fp.MW1 as ORIGIN_MW1,
+# MAGIC           fp.MW2 as ORIGIN_MW2,
+# MAGIC           fp.OC1 as ORIGIN_OC1,
+# MAGIC           fp.OD1 as ORIGIN_OD1,
+# MAGIC           fp.OD2 as ORIGIN_OD2,
+# MAGIC           fp.REM as ORIGIN_REM,
+# MAGIC           fp.EQD as ORIGIN_EQD,
+# MAGIC           fp.AW2 as ORIGIN_AW2,
+# MAGIC           fp.AX4 as ORIGIN_AX4,
+# MAGIC           fp.GD1 as ORIGIN_GD1,
+# MAGIC           fp.AW5 as ORIGIN_AW5,
+# MAGIC           fp.GN1 as ORIGIN_GN1,
+# MAGIC           fp.AJ1 as ORIGIN_AJ1,
+# MAGIC           fp.AW3 as ORIGIN_AW3,
+# MAGIC           fp.MK1 as ORIGIN_MK1,
+# MAGIC           fp.KA4 as ORIGIN_KA4,
+# MAGIC           fp.GG3 as ORIGIN_GG3,
+# MAGIC           fp.AN1 as ORIGIN_AN1,
+# MAGIC           fp.RH1 as ORIGIN_RH1,
+# MAGIC           fp.AU5 as ORIGIN_AU5,
+# MAGIC           fp.HL1 as ORIGIN_HL1,
+# MAGIC           fp.OB1 as ORIGIN_OB1,
+# MAGIC           fp.AT8 as ORIGIN_AT8,
+# MAGIC           fp.AW7 as ORIGIN_AW7,
+# MAGIC           fp.AZ1 as ORIGIN_AZ1,
+# MAGIC           fp.CH1 as ORIGIN_CH1,
+# MAGIC           fp.RH3 as ORIGIN_RH3,
+# MAGIC           fp.GK1 as ORIGIN_GK1,
+# MAGIC           fp.IB1 as ORIGIN_IB1,
+# MAGIC           fp.AX1 as ORIGIN_AX1,
+# MAGIC           fp.CT1 as ORIGIN_CT1,
+# MAGIC           fp.AK1 as ORIGIN_AK1,
+# MAGIC           fp.CN2 as ORIGIN_CN2,
+# MAGIC           fp.OE1 as ORIGIN_OE1,
+# MAGIC           fp.MW5 as ORIGIN_MW5,
+# MAGIC           fp.AO1 as ORIGIN_AO1,
+# MAGIC           fp.KA3 as ORIGIN_KA3,
+# MAGIC           fp.AA3 as ORIGIN_AA3,
+# MAGIC           fp.CR1 as ORIGIN_CR1,
+# MAGIC           fp.CF2 as ORIGIN_CF2,
+# MAGIC           fp.KB2 as ORIGIN_KB2,
+# MAGIC           fp.GM1 as ORIGIN_GM1,
+# MAGIC           fp.AT5 as ORIGIN_AT5,
+# MAGIC           fp.AY2 as ORIGIN_AY2,
+# MAGIC           fp.MW6 as ORIGIN_MW6,
+# MAGIC           fp.MG1 as ORIGIN_MG1,
+# MAGIC           fp.AH6 as ORIGIN_AH6,
+# MAGIC           fp.AU2 as ORIGIN_AU2,
+# MAGIC           fp.GD2 as ORIGIN_GD2,
+# MAGIC           fp.AW4 as ORIGIN_AW4,
+# MAGIC           fp.MF1 as ORIGIN_MF1,
+# MAGIC           fp.AA1 as ORIGIN_AA1,
+# MAGIC           fp.AH2 as ORIGIN_AH2,
+# MAGIC           fp.AH3 as ORIGIN_AH3,
+# MAGIC           fp.OE3 as ORIGIN_OE3,
+# MAGIC           fp.AT6 as ORIGIN_AT6,
+# MAGIC           fp.AL2 as ORIGIN_AL2,
+# MAGIC           fp.AL3 as ORIGIN_AL3,
+# MAGIC           fp.AX5 as ORIGIN_AX5,
+# MAGIC           fp.IB2 as ORIGIN_IB2,
+# MAGIC           fp.AI3 as ORIGIN_AI3,
+# MAGIC           fp.CV3 as ORIGIN_CV3,
+# MAGIC           fp.WA1 as ORIGIN_WA1,
+# MAGIC           fp.GH1 as ORIGIN_GH1,
+# MAGIC           fp.KF1 as ORIGIN_KF1,
+# MAGIC           fp.CU2 as ORIGIN_CU2,
+# MAGIC           fp.CT3 as ORIGIN_CT3,
+# MAGIC           fp.SA1 as ORIGIN_SA1,
+# MAGIC           fp.AU1 as ORIGIN_AU1,
+# MAGIC           fp.KD2 as ORIGIN_KD2,
+# MAGIC           fp.AI5 as ORIGIN_AI5,
+# MAGIC           fp.GO1 as ORIGIN_GO1,
+# MAGIC           fp.GD3 as ORIGIN_GD3,
+# MAGIC           fp.CG3 as ORIGIN_CG3,
+# MAGIC           fp.AI1 as ORIGIN_AI1,
+# MAGIC           fp.AL1 as ORIGIN_AL1,
+# MAGIC           fp.AW6 as ORIGIN_AW6,
+# MAGIC           fp.MW4 as ORIGIN_MW4,
+# MAGIC           fp.AX6 as ORIGIN_AX6,
+# MAGIC           fp.CV1 as ORIGIN_CV1,
+# MAGIC           fp.ME1 as ORIGIN_ME1,
+# MAGIC           fp.KC2 as ORIGIN_KC2,
+# MAGIC           fp.CN1 as ORIGIN_CN1,
+# MAGIC           fp.UA1 as ORIGIN_UA1,
+# MAGIC           fp.GD5 as ORIGIN_GD5,
+# MAGIC           fp.UG2 as ORIGIN_UG2,
+# MAGIC           fp.AT3 as ORIGIN_AT3,
+# MAGIC           fp.AT4 as ORIGIN_AT4,
+# MAGIC           fp.GJ1 as ORIGIN_GJ1,
+# MAGIC           fp.MV1 as ORIGIN_MV1,
+# MAGIC           fp.GA5 as ORIGIN_GA5,
+# MAGIC           fp.CT2 as ORIGIN_CT2,
+# MAGIC           fp.CG2 as ORIGIN_CG2,
+# MAGIC           fp.ED1 as ORIGIN_ED1,
+# MAGIC           fp.AE1 as ORIGIN_AE1,
+# MAGIC           fp.CO1 as ORIGIN_CO1,
+# MAGIC           fp.KE1 as ORIGIN_KE1,
+# MAGIC           fp.KB1 as ORIGIN_KB1,
+# MAGIC           fp.AI4 as ORIGIN_AI4,
+# MAGIC           fp.MW3 as ORIGIN_MW3,
+# MAGIC           fp.KG2 as ORIGIN_KG2,
+# MAGIC           fp.AA2 as ORIGIN_AA2,
+# MAGIC           fp.AX2 as ORIGIN_AX2,
+# MAGIC           fp.AY1 as ORIGIN_AY1,
+# MAGIC           fp.RH2 as ORIGIN_RH2,
+# MAGIC           fp.OE2 as ORIGIN_OE2,
+# MAGIC           fp.CU3 as ORIGIN_CU3,
+# MAGIC           fp.MH1 as ORIGIN_MH1,
+# MAGIC           fp.AM1 as ORIGIN_AM1,
+# MAGIC           fp.AU4 as ORIGIN_AU4,
+# MAGIC           fp.GA6 as ORIGIN_GA6,
+# MAGIC           fp.KG1 as ORIGIN_KG1,
+# MAGIC           fp.AU3 as ORIGIN_AU3,
+# MAGIC           fp.AT7 as ORIGIN_AT7,
+# MAGIC           fp.KD1 as ORIGIN_KD1,
+# MAGIC           fp.GL1 as ORIGIN_GL1,
+# MAGIC           fp.IA1 as ORIGIN_IA1,
+# MAGIC           fp.GG2 as ORIGIN_GG2,
+# MAGIC           fp.OD3 as ORIGIN_OD3,
+# MAGIC           fp.UG1 as ORIGIN_UG1,
+# MAGIC           fp.CB1 as ORIGIN_CB1,
+# MAGIC           fp.AI6 as ORIGIN_AI6,
+# MAGIC           fp.CI1 as ORIGIN_CI1,
+# MAGIC           fp.CV2 as ORIGIN_CV2,
+# MAGIC           fp.AZ2 as ORIGIN_AZ2,
+# MAGIC           fp.AD1 as ORIGIN_AD1,
+# MAGIC           fp.AH1 as ORIGIN_AH1,
+# MAGIC           fp.WD1 as ORIGIN_WD1,
+# MAGIC           fp.AA4 as ORIGIN_AA4,
+# MAGIC           fp.KC1 as ORIGIN_KC1,
+# MAGIC           fp.IA2 as ORIGIN_IA2,
+# MAGIC           fp.CF3 as ORIGIN_CF3,
+# MAGIC           fp.AI2 as ORIGIN_AI2,
+# MAGIC           fp.AT1 as ORIGIN_AT1,
+# MAGIC           fp.GD4 as ORIGIN_GD4,
+# MAGIC           fp.AX3 as ORIGIN_AX3,
+# MAGIC           fp.AH4 as ORIGIN_AH4,
+# MAGIC           fp.KB3 as ORIGIN_KB3,
+# MAGIC           fp.CU1 as ORIGIN_CU1,
+# MAGIC           fp.CN4 as ORIGIN_CN4,
+# MAGIC           fp.AT2 as ORIGIN_AT2,
+# MAGIC           fp.CG1 as ORIGIN_CG1,
+# MAGIC           fp.CF1 as ORIGIN_CF1,
+# MAGIC           fp.GG1 as ORIGIN_GG1,
+# MAGIC           fp.MV2 as ORIGIN_MV2,
+# MAGIC           fp.CW1 as ORIGIN_CW1,
+# MAGIC           fp.GG4 as ORIGIN_GG4,
+# MAGIC           fp.AB1 as ORIGIN_AB1,
+# MAGIC           fp.AH5 as ORIGIN_AH5,
+# MAGIC           fp.CN3 as ORIGIN_CN3,
+# MAGIC           fp.WEATHER_DATE as ORIGIN_WEATHER_DATE          
+# MAGIC           fp.DEST_WEATHER_KEY,
+# MAGIC           fp.DEST_WEATHER_STATION,
+# MAGIC           fp.DEST_WEATHER_TIMESTAMP,
+# MAGIC           fp.DEST_WEATHER_SOURCE,
+# MAGIC           fp.DEST_WEATHER_LAT,
+# MAGIC           fp.DEST_WEATHER_LON,
+# MAGIC           fp.DEST_WEATHER_ELEV,
+# MAGIC           fp.DEST_WEATHER_NAME,
+# MAGIC           fp.DEST_WEATHER_REPORT_TYPE,
+# MAGIC           fp.DEST_WEATHER_CALL_SIGN,
+# MAGIC           fp.DEST_QUALITY_CONTROL,
+# MAGIC           fp.DEST_WND,
+# MAGIC           fp.DEST_CIG,
+# MAGIC           fp.DEST_VIS,
+# MAGIC           fp.DEST_TMP,
+# MAGIC           fp.DEST_DEW,
+# MAGIC           fp.DEST_SLP,
+# MAGIC           fp.DEST_AW1,
+# MAGIC           fp.DEST_GA1,
+# MAGIC           fp.DEST_GA2,
+# MAGIC           fp.DEST_GA3,
+# MAGIC           fp.DEST_GA4,
+# MAGIC           fp.DEST_GE1,
+# MAGIC           fp.DEST_GF1,
+# MAGIC           fp.DEST_KA1,
+# MAGIC           fp.DEST_KA2,
+# MAGIC           fp.DEST_MA1,
+# MAGIC           fp.DEST_MD1,
+# MAGIC           fp.DEST_MW1,
+# MAGIC           fp.DEST_MW2,
+# MAGIC           fp.DEST_OC1,
+# MAGIC           fp.DEST_OD1,
+# MAGIC           fp.DEST_OD2,
+# MAGIC           fp.DEST_REM,
+# MAGIC           fp.DEST_EQD,
+# MAGIC           fp.DEST_AW2,
+# MAGIC           fp.DEST_AX4,
+# MAGIC           fp.DEST_GD1,
+# MAGIC           fp.DEST_AW5,
+# MAGIC           fp.DEST_GN1,
+# MAGIC           fp.DEST_AJ1,
+# MAGIC           fp.DEST_AW3,
+# MAGIC           fp.DEST_MK1,
+# MAGIC           fp.DEST_KA4,
+# MAGIC           fp.DEST_GG3,
+# MAGIC           fp.DEST_AN1,
+# MAGIC           fp.DEST_RH1,
+# MAGIC           fp.DEST_AU5,
+# MAGIC           fp.DEST_HL1,
+# MAGIC           fp.DEST_OB1,
+# MAGIC           fp.DEST_AT8,
+# MAGIC           fp.DEST_AW7,
+# MAGIC           fp.DEST_AZ1,
+# MAGIC           fp.DEST_CH1,
+# MAGIC           fp.DEST_RH3,
+# MAGIC           fp.DEST_GK1,
+# MAGIC           fp.DEST_IB1,
+# MAGIC           fp.DEST_AX1,
+# MAGIC           fp.DEST_CT1,
+# MAGIC           fp.DEST_AK1,
+# MAGIC           fp.DEST_CN2,
+# MAGIC           fp.DEST_OE1,
+# MAGIC           fp.DEST_MW5,
+# MAGIC           fp.DEST_AO1,
+# MAGIC           fp.DEST_KA3,
+# MAGIC           fp.DEST_AA3,
+# MAGIC           fp.DEST_CR1,
+# MAGIC           fp.DEST_CF2,
+# MAGIC           fp.DEST_KB2,
+# MAGIC           fp.DEST_GM1,
+# MAGIC           fp.DEST_AT5,
+# MAGIC           fp.DEST_AY2,
+# MAGIC           fp.DEST_MW6,
+# MAGIC           fp.DEST_MG1,
+# MAGIC           fp.DEST_AH6,
+# MAGIC           fp.DEST_AU2,
+# MAGIC           fp.DEST_GD2,
+# MAGIC           fp.DEST_AW4,
+# MAGIC           fp.DEST_MF1,
+# MAGIC           fp.DEST_AA1,
+# MAGIC           fp.DEST_AH2,
+# MAGIC           fp.DEST_AH3,
+# MAGIC           fp.DEST_OE3,
+# MAGIC           fp.DEST_AT6,
+# MAGIC           fp.DEST_AL2,
+# MAGIC           fp.DEST_AL3,
+# MAGIC           fp.DEST_AX5,
+# MAGIC           fp.DEST_IB2,
+# MAGIC           fp.DEST_AI3,
+# MAGIC           fp.DEST_CV3,
+# MAGIC           fp.DEST_WA1,
+# MAGIC           fp.DEST_GH1,
+# MAGIC           fp.DEST_KF1,
+# MAGIC           fp.DEST_CU2,
+# MAGIC           fp.DEST_CT3,
+# MAGIC           fp.DEST_SA1,
+# MAGIC           fp.DEST_AU1,
+# MAGIC           fp.DEST_KD2,
+# MAGIC           fp.DEST_AI5,
+# MAGIC           fp.DEST_GO1,
+# MAGIC           fp.DEST_GD3,
+# MAGIC           fp.DEST_CG3,
+# MAGIC           fp.DEST_AI1,
+# MAGIC           fp.DEST_AL1,
+# MAGIC           fp.DEST_AW6,
+# MAGIC           fp.DEST_MW4,
+# MAGIC           fp.DEST_AX6,
+# MAGIC           fp.DEST_CV1,
+# MAGIC           fp.DEST_ME1,
+# MAGIC           fp.DEST_KC2,
+# MAGIC           fp.DEST_CN1,
+# MAGIC           fp.DEST_UA1,
+# MAGIC           fp.DEST_GD5,
+# MAGIC           fp.DEST_UG2,
+# MAGIC           fp.DEST_AT3,
+# MAGIC           fp.DEST_AT4,
+# MAGIC           fp.DEST_GJ1,
+# MAGIC           fp.DEST_MV1,
+# MAGIC           fp.DEST_GA5,
+# MAGIC           fp.DEST_CT2,
+# MAGIC           fp.DEST_CG2,
+# MAGIC           fp.DEST_ED1,
+# MAGIC           fp.DEST_AE1,
+# MAGIC           fp.DEST_CO1,
+# MAGIC           fp.DEST_KE1,
+# MAGIC           fp.DEST_KB1,
+# MAGIC           fp.DEST_AI4,
+# MAGIC           fp.DEST_MW3,
+# MAGIC           fp.DEST_KG2,
+# MAGIC           fp.DEST_AA2,
+# MAGIC           fp.DEST_AX2,
+# MAGIC           fp.DEST_AY1,
+# MAGIC           fp.DEST_RH2,
+# MAGIC           fp.DEST_OE2,
+# MAGIC           fp.DEST_CU3,
+# MAGIC           fp.DEST_MH1,
+# MAGIC           fp.DEST_AM1,
+# MAGIC           fp.DEST_AU4,
+# MAGIC           fp.DEST_GA6,
+# MAGIC           fp.DEST_KG1,
+# MAGIC           fp.DEST_AU3,
+# MAGIC           fp.DEST_AT7,
+# MAGIC           fp.DEST_KD1,
+# MAGIC           fp.DEST_GL1,
+# MAGIC           fp.DEST_IA1,
+# MAGIC           fp.DEST_GG2,
+# MAGIC           fp.DEST_OD3,
+# MAGIC           fp.DEST_UG1,
+# MAGIC           fp.DEST_CB1,
+# MAGIC           fp.DEST_AI6,
+# MAGIC           fp.DEST_CI1,
+# MAGIC           fp.DEST_CV2,
+# MAGIC           fp.DEST_AZ2,
+# MAGIC           fp.DEST_AD1,
+# MAGIC           fp.DEST_AH1,
+# MAGIC           fp.DEST_WD1,
+# MAGIC           fp.DEST_AA4,
+# MAGIC           fp.DEST_KC1,
+# MAGIC           fp.DEST_IA2,
+# MAGIC           fp.DEST_CF3,
+# MAGIC           fp.DEST_AI2,
+# MAGIC           fp.DEST_AT1,
+# MAGIC           fp.DEST_GD4,
+# MAGIC           fp.DEST_AX3,
+# MAGIC           fp.DEST_AH4,
+# MAGIC           fp.DEST_KB3,
+# MAGIC           fp.DEST_CU1,
+# MAGIC           fp.DEST_CN4,
+# MAGIC           fp.DEST_AT2,
+# MAGIC           fp.DEST_CG1,
+# MAGIC           fp.DEST_CF1,
+# MAGIC           fp.DEST_GG1,
+# MAGIC           fp.DEST_MV2,
+# MAGIC           fp.DEST_CW1,
+# MAGIC           fp.DEST_GG4,
+# MAGIC           fp.DEST_AB1,
+# MAGIC           fp.DEST_AH5,
+# MAGIC           fp.DEST_CN3,
+# MAGIC           fp.DEST_WEATHER_DATE
+# MAGIC FROM flights_and_weather_dest fp
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+
 
 # COMMAND ----------
 
@@ -3162,3 +4200,98 @@ df_train, df_test, df_validate = generate_train_test_validate_sets(train_ratio=.
 
 
 
+
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+# MAGIC %md ### Weather data pre-processing that we used to do first. We'll do the feature engineering as part of the pipeline process.
+
+# COMMAND ----------
+
+def process_weather_data(df):
+  WND_col = f.split(df['WND'], ',')
+  CIG_col = f.split(df['CIG'], ',')
+  VIS_col = f.split(df['VIS'], ',')
+  TMP_col = f.split(df['TMP'], ',')
+  DEW_col = f.split(df['DEW'], ',')
+  SLP_col = f.split(df['SLP'], ',')
+  df = (df
+    .withColumn("STATION", f.lpad(df.STATION, 11, '0'))
+    # WND Fields [direction angle, quality code, type code, speed rate, speed quality code]
+    .withColumn('WND_DIRECTION_ANGLE', WND_col.getItem(0).cast('int')) # continuous
+    .withColumn('WND_QUALITY_CODE', WND_col.getItem(1).cast('int')) # categorical
+    .withColumn('WND_TYPE_CODE', WND_col.getItem(2).cast('string')) # categorical
+    .withColumn('WND_SPEED_RATE', WND_col.getItem(3).cast('int')) # categorical
+    .withColumn('WND_SPEED_QUALITY_CODE', WND_col.getItem(4).cast('int')) # categorical
+    # CIG Fields
+    .withColumn('CIG_CEILING_HEIGHT_DIMENSION', CIG_col.getItem(0).cast('int')) # continuous 
+    .withColumn('CIG_CEILING_QUALITY_CODE', CIG_col.getItem(1).cast('int')) # categorical
+    .withColumn('CIG_CEILING_DETERMINATION_CODE', CIG_col.getItem(2).cast('string')) # categorical 
+    .withColumn('CIG_CAVOK_CODE', CIG_col.getItem(3).cast('string')) # categorical/binary
+    # VIS Fields
+    .withColumn('VIS_DISTANCE_DIMENSION', VIS_col.getItem(0).cast('int')) # continuous
+    .withColumn('VIS_DISTANCE_QUALITY_CODE', VIS_col.getItem(1).cast('int')) # categorical
+    .withColumn('VIS_VARIABILITY_CODE', VIS_col.getItem(2).cast('string')) # categorical/binary
+    .withColumn('VIS_QUALITY_VARIABILITY_CODE', VIS_col.getItem(3).cast('int')) # categorical
+    # TMP Fields
+    .withColumn('TMP_AIR_TEMP', TMP_col.getItem(0).cast('int')) # continuous
+    .withColumn('TMP_AIR_TEMP_QUALITY_CODE', TMP_col.getItem(1).cast('string')) # categorical
+    # DEW Fields
+    .withColumn('DEW_POINT_TEMP', DEW_col.getItem(0).cast('int')) # continuous
+    .withColumn('DEW_POINT_QUALITY_CODE', DEW_col.getItem(1).cast('string')) # categorical
+    # SLP Fields
+    .withColumn('SLP_SEA_LEVEL_PRES', SLP_col.getItem(0).cast('int')) # continuous
+    .withColumn('SLP_SEA_LEVEL_PRES_QUALITY_CODE', SLP_col.getItem(1).cast('int')) # categorical
+    # SNOW Fields
+    
+    .withColumnRenamed("DATE", "WEATHER_DATE")
+    .withColumnRenamed("SOURCE", "WEATHER_SOURCE")
+    .withColumnRenamed("STATION", "WEATHER_STATION")
+       )
+
+
+  cols = set(df.columns)
+  remove_cols = set(['LATITUDE', 'LONGITUDE', 'ELEVATION', 'NAME', 'REPORT_TYPE', 'CALL_SIGN', 'WND', 'CIG','VIS','TMP', 'DEW', 'SLP'])
+  cols = list(cols - remove_cols)
+  df = df.select(cols)
+  for col in df.columns:
+    df = df.withColumnRenamed(col,f'WEATHER1_{col}')
+  return df
+  
+
+weather_processed_df = process_weather_data(weather_raw_df)
+
+# COMMAND ----------
+
+# MAGIC %md # Citations
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Abdulwahab. Aljubairy, A., L. Atzori, A., L. Belcastro, F., Y. Chen, J., NR. Chopde, M., D. Georgakopoulos, P., . . . W. Wu, C. (1970, January 01). A system for effectively predicting flight delays based on IoT data. Retrieved July 25, 2020, from https://link.springer.com/article/10.1007/s00607-020-00794-w  
+# MAGIC Ye, B., Liu, B., Tian, Y., &amp; Wan, L. (2020, April 1). A Methodology for Predicting Aggregate Flight Departure ... Retrieved July 25, 2020, from https://www.mdpi.com/2071-1050/12/7/2749/pdf
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC OPTIMIZE <table_name>
