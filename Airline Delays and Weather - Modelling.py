@@ -9,8 +9,7 @@
 
 # COMMAND ----------
 
-# MAGIC %md 
-# MAGIC ### Imports
+# MAGIC %md ### Imports
 
 # COMMAND ----------
 
@@ -35,6 +34,8 @@ from delta.tables import DeltaTable
 from pyspark.ml import Pipeline
 from pyspark.ml.feature import StringIndexer, VectorAssembler, StandardScaler, OneHotEncoder 
 from pyspark.ml.classification import LogisticRegression
+from pyspark.ml.classification import RandomForestClassifier
+from pyspark.ml.classification import GBTClassifier
 
 %matplotlib inline
 sqlContext = SQLContext(sc)
@@ -97,8 +98,7 @@ flights_and_weather_combined_processed = spark.sql("SELECT * FROM flights_and_we
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC Assumptions for NULL **DEP_DEL15** values:
+# MAGIC %md Assumptions for NULL **DEP_DEL15** values:
 # MAGIC * Most are cancelled - drop those rows for now. Will revisit cancellations later.
 # MAGIC * If DEP_DEL_15 is NULL and the difference between schedule departure and actual departure is 0 , set DEP_DEL15 -> 0
 # MAGIC * If DEP_DEL_15 is NULL and the difference between schedule departure and actual departure is not 0 (5 records), -> drop records
@@ -237,8 +237,7 @@ class Analyze:
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC # Remaining analysis on fully joined data table
+# MAGIC %md # Remaining analysis on fully joined data table
 
 # COMMAND ----------
 
@@ -1127,6 +1126,12 @@ def impute_missing_values(df):
 
 # COMMAND ----------
 
+def avg_weather_data(df):
+  for c in df.columns:
+    if c in 
+
+# COMMAND ----------
+
 #cleaned_data = clean_data(flights_and_weather_combined_processed.sample(0.01, False)) # clean and cast our data to appropriate data types
 cleaned_data = clean_data(flights_and_weather_combined_processed) # clean and cast our data to appropriate data types
 cols_to_drop = [ 'DEP_DELAY', 'DEP_DELAY_NEW', 'ACTUAL_ELAPSED_TIME', 
@@ -1160,8 +1165,7 @@ data_ready_for_model.createOrReplaceTempView('data_ready_for_model')
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC First we need to drop columns we can't use at inference time.
+# MAGIC %md First we need to drop columns we can't use at inference time.
 
 # COMMAND ----------
 
@@ -1174,8 +1178,8 @@ display(data_ready_for_model)
 # COMMAND ----------
 
 train_data = spark.sql("SELECT * FROM data_ready_for_model WHERE YEAR IN (2015, 2016, 2017)").drop('YEAR')
-validation_data = spark.sql("SELECT * FROM data_ready_for_model WHERE YEAR = 2018;").drop('YEAR')
-test_data = spark.sql("SELECT * FROM data_ready_for_model WHERE YEAR = 2019;").drop('YEAR')
+validation_data = spark.sql("SELECT * FROM data_ready_for_model WHERE YEAR = 2018").drop('YEAR')
+test_data = spark.sql("SELECT * FROM data_ready_for_model WHERE YEAR = 2019").drop('YEAR')
 
 train_data.createOrReplaceTempView('train_data')
 validation_data.createOrReplaceTempView('validation_data')
@@ -1183,8 +1187,7 @@ test_data.createOrReplaceTempView('test_data')
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC ### Routines to encode and scale our features
+# MAGIC %md ### Routines to encode and scale our features
 # MAGIC 
 # MAGIC We encode and scale only on train data and set up the transformation pipeline with those stages so it may be applied on validate and test data later
 
@@ -1272,10 +1275,48 @@ def confusion_matrix(model_results,index):
   confusion_matrix = confusion_matrix.append(conf_matrix_no_delay,ignore_index=True)
   return confusion_matrix
 
+def AUC(model, predictions):
+  from pyspark.ml.evaluation import BinaryClassificationEvaluator
+  import matplotlib.pyplot as plt
+  evaluator = BinaryClassificationEvaluator()
+  evaluation = evaluator.evaluate(predictions)
+  print("evaluation (area under ROC): %f" % evaluation)
+
+def ROC(model, predictions):
+  plt.figure(figsize=(10,10))
+  plt.plot([0, 1], [0, 1], 'r--')
+  plt.plot(model.summary.roc.select('FPR').collect(),
+         model.summary.roc.select('TPR').collect())
+  plt.xlabel('FPR')
+  plt.ylabel('TPR')
+  plt.show()
+
+def showPR(model_results):
+  pr = model_results.toPandas()
+  ax.plot(pr['recall'], pr['precision'])
+  ax.set_xlabel('Precision')
+  ax.set_ylabel('Recall')
+  ax.set_title('Precision Recall')
+
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC # Model 1: Baseline Evaluation
+
+
+# COMMAND ----------
+
+AUC(model, train_preds)
+
+# COMMAND ----------
+
+# from pyspark.ml.evaluation import BinaryClassificationEvaluator
+# evaluator = BinaryClassificationEvaluator()
+# evaluation = evaluator.evaluate(train_preds)
+# print("evaluation (area under ROC): %f" % evaluation)
+
+
+# COMMAND ----------
+
+# MAGIC %md # Model 1: Baseline Evaluation with PCA
 # MAGIC 
 # MAGIC Set up and run the pipeline for the baseline model
 
@@ -1290,7 +1331,7 @@ transformed_train_data = encoding_pipeline.transform(train_data)['features', 'la
 
 # train a model on our transformed train data
 startTime = time.time()
-lr = LogisticRegression(featuresCol = 'features', labelCol = 'label', maxIter = 30, regParam = 0.001)
+lr = LogisticRegression(featuresCol = 'features', labelCol = 'label', maxIter = 30, regParam = 0.001, elasticNetParam = 0.25, standardization = False)
 model = lr.fit(transformed_train_data)
 train_preds = model.transform(transformed_train_data)
 endTime = time.time()
@@ -1301,6 +1342,10 @@ print(f"The training time of the Logistic Regression model is: {(endTime - start
 
 train_metrics = evaluation_metrics(train_preds, "Logistic Regression on training data")
 display(train_metrics)
+
+# COMMAND ----------
+
+showROC(train_preds)
 
 # COMMAND ----------
 
@@ -1322,13 +1367,44 @@ display(validation_metrics)
 
 # COMMAND ----------
 
+# display our evaluation metrics
+validation_metrics = evaluation_metrics(validation_preds, "Logistic Regression on validation data")
+display(validation_metrics)
+
+# COMMAND ----------
+
+# MAGIC %md # Parameter Search
+
+# COMMAND ----------
+
+# transformed_train_data_sample = transformed_train_data.sample(False, 0.0001)
 
 
 # COMMAND ----------
 
+from pyspark.ml import Pipeline
+from pyspark.ml.classification import LogisticRegression
+from pyspark.ml.evaluation import BinaryClassificationEvaluator
+from pyspark.ml.feature import HashingTF, Tokenizer
+from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
 
 
-# COMMAND ----------
+lr = LogisticRegression(featuresCol = 'features', labelCol = 'label', maxIter = 30, regParam = 0.001)
+pipeline = Pipeline(stages=[lr])
+                    
+
+paramGrid = ParamGridBuilder() \
+    .addGrid(lr.maxIter, [1, 30]) \
+    .addGrid(lr.regParam, [0.01, 0.001]) \
+    .build()
+
+crossval = CrossValidator(estimator=pipeline,
+                          estimatorParamMaps=paramGrid,
+                          evaluator=BinaryClassificationEvaluator(),
+                          numFolds=2) 
+
+cvModel = crossval.fit(transformed_train_data_sample)
+
 
 
 
@@ -1363,7 +1439,7 @@ display(validation_metrics)
 
 # COMMAND ----------
 
-joinedDf = spark.sql("SELECT * from joinedDf")
+joinedDf = spark.sql("SELECT * from flights_and_weather_combined_processed_baseline")
 display(joinedDf) 
 
 # COMMAND ----------
@@ -1392,19 +1468,182 @@ display(joinedDf)
 
 # COMMAND ----------
 
-
-
-# COMMAND ----------
-
-
+page_rank_cleaned_data_with_missing_values_corrected = correct_missing_codes(spark.sql("SELECT * FROM joinedDf"))
+page_rank_data_ready_for_model = impute_missing_values(page_rank_cleaned_data_with_missing_values_corrected)
+page_rank_data_ready_for_model.createOrReplaceTempView('page_rank_data_ready_for_model')
 
 # COMMAND ----------
 
-
+# MAGIC %md # PageRank Logistic Regression Model
 
 # COMMAND ----------
 
+train_data = spark.sql("SELECT * FROM page_rank_data_ready_for_model WHERE YEAR IN (2015, 2016, 2017)").drop('YEAR')
+validation_data = spark.sql("SELECT * FROM page_rank_data_ready_for_model WHERE YEAR = 2018").drop('YEAR')
+test_data = spark.sql("SELECT * FROM page_rank_data_ready_for_model WHERE YEAR = 2019").drop('YEAR')
 
+train_data.createOrReplaceTempView('train_data')
+validation_data.createOrReplaceTempView('validation_data')
+test_data.createOrReplaceTempView('test_data')
+
+# COMMAND ----------
+
+# create an encoding pipeline based on information from our training data
+encoding_pipeline = Pipeline(stages = create_encoding_stages(train_data,'DEP_DEL15')).fit(train_data)
+
+# apply the transformations to our train data
+transformed_train_data = encoding_pipeline.transform(train_data)['features', 'label']
+
+
+# train a model on our transformed train data
+startTime = time.time()
+lr = LogisticRegression(featuresCol = 'features', labelCol = 'label', maxIter = 30, regParam = 0.001)
+model = lr.fit(transformed_train_data)
+train_preds = model.transform(transformed_train_data)
+endTime = time.time()
+print(f"The training time of the Logistic Regression model is: {(endTime - startTime) / (60)} minutes")
+                             
+
+# COMMAND ----------
+
+train_metrics = evaluation_metrics(train_preds, "Logistic Regression for PageRank Train")
+display(train_metrics)
+
+# COMMAND ----------
+
+# MAGIC %md ### Validation Evaluation
+
+# COMMAND ----------
+
+# apply the encoding transformations from our pipeline to the validation data
+transformed_validation_data = encoding_pipeline.transform(validation_data)['features', 'label']
+
+# run the fitted model on the transformed validation data
+validation_preds = model.transform(transformed_validation_data)
+
+# COMMAND ----------
+
+# display our evaluation metrics
+validation_metrics = evaluation_metrics(validation_preds, "Logistic Regression for PageRank Validation")
+display(validation_metrics)
+
+# COMMAND ----------
+
+# MAGIC %md # PageRank Random Forest
+
+# COMMAND ----------
+
+encoding_pipeline = Pipeline(stages = create_encoding_stages(train_data,'DEP_DEL15')).fit(train_data)
+
+# apply the transformations to our train data
+transformed_train_data = encoding_pipeline.transform(train_data)['features', 'label']
+
+# COMMAND ----------
+
+# train a model on our transformed train data
+startTime = time.time()
+rf = RandomForestClassifier(labelCol = "label", featuresCol = "features", numTrees = 45, 
+                           featureSubsetStrategy = "auto", impurity = "gini", subsamplingRate = 0.6, maxDepth = 25, maxBins = 16)
+model = rf.fit(transformed_train_data)
+train_preds = model.transform(transformed_train_data)
+endTime = time.time()
+print(f"The training time of the Random Forest model is: {(endTime - startTime) / (60)} minutes")
+                             
+
+# COMMAND ----------
+
+train_metrics = evaluation_metrics(train_preds, "Random Forest on training data")
+display(train_metrics)
+
+# COMMAND ----------
+
+# MAGIC %md ### Validation Evaluation
+
+# COMMAND ----------
+
+transformed_validation_data = encoding_pipeline.transform(validation_data)['features', 'label']
+validation_preds = model.transform(transformed_validation_data)
+validation_metrics = evaluation_metrics(validation_preds, "Random Forest on validation data")
+display(validation_metrics)
+
+# COMMAND ----------
+
+# MAGIC %md # Random Forest Modeling
+
+# COMMAND ----------
+
+encoding_pipeline = Pipeline(stages = create_encoding_stages(train_data,'DEP_DEL15')).fit(train_data)
+
+# apply the transformations to our train data
+transformed_train_data = encoding_pipeline.transform(train_data)['features', 'label']
+
+# COMMAND ----------
+
+# create an encoding pipeline based on information from our training data
+# encoding_pipeline = Pipeline(stages = create_encoding_stages(train_data,'DEP_DEL15')).fit(train_data)
+
+# apply the transformations to our train data
+# transformed_train_data = encoding_pipeline.transform(train_data)['features', 'label']
+
+
+# train a model on our transformed train data
+startTime = time.time()
+rf = RandomForestClassifier(labelCol = "label", featuresCol = "features", numTrees = 45, 
+                           featureSubsetStrategy = "auto", impurity = "gini", subsamplingRate = 0.6, maxDepth = 25, maxBins = 16)
+model = rf.fit(transformed_train_data)
+train_preds = model.transform(transformed_train_data)
+endTime = time.time()
+print(f"The training time of the Random Forest model is: {(endTime - startTime) / (60)} minutes")
+                             
+
+# COMMAND ----------
+
+train_metrics = evaluation_metrics(train_preds, "Random Forest on training data")
+display(train_metrics)
+
+# COMMAND ----------
+
+train_metrics = evaluation_metrics(train_preds, "Random Forest on training data")
+display(train_metrics)
+
+# COMMAND ----------
+
+transformed_validation_data = encoding_pipeline.transform(validation_data)['features', 'label']
+validation_preds = model.transform(transformed_validation_data)
+validation_metrics = evaluation_metrics(validation_preds, "Random Forest on validation data")
+display(validation_metrics)
+
+# COMMAND ----------
+
+transformed_validation_data = encoding_pipeline.transform(validation_data)['features', 'label']
+validation_preds = model.transform(transformed_validation_data)
+validation_metrics = evaluation_metrics(validation_preds, "Random Forest on validation data")
+display(validation_metrics)
+
+# COMMAND ----------
+
+# MAGIC %md # Gradient-Boosted Trees
+
+# COMMAND ----------
+
+startTime = time.time()
+gbt = GBTClassifier(labelCol = "label", featuresCol = "features", maxIter = 10)
+gbt_model = gbt.fit(transformed_train_data)
+train_preds = gbt_model.transform(transformed_train_data)
+endTime = time.time()
+print(f"The training time of the Gradient-Boosted Tree model is: {(endTime - startTime) / (60)} minutes")
+
+# COMMAND ----------
+
+train_metrics = evaluation_metrics(train_preds, "Gradient-Boosted Trees on training data")
+display(train_metrics)
+
+# COMMAND ----------
+
+transformed_validation_data = encoding_pipeline.transform(validation_data)['features', 'label']
+validation_preds = model.transform(transformed_validation_data)
+validation_metrics = evaluation_metrics(validation_preds, "Gradient-Boosted Trees on validation data")
+display(validation_metrics)
 
 # COMMAND ----------
 
