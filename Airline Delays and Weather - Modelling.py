@@ -10,6 +10,11 @@
 # COMMAND ----------
 
 # MAGIC %md # Table of Contents
+# MAGIC ### 6. Pre-Model Data Prep
+# MAGIC #### a. Retreive post-processed data from the silver data pipeline
+# MAGIC #### b. Split into Train/Validation/Test
+# MAGIC #### c. Apply specific cleanup required before modelling (e.g. imputation)
+# MAGIC #### d. Save the model-ready datasets in silver
 # MAGIC ### 7. Model Exploration (Pipeline)
 # MAGIC #### a. Feature Selection
 # MAGIC #### b. Feature Engineering
@@ -18,29 +23,6 @@
 # MAGIC ### 8. Model Selection and Tuning
 # MAGIC ### 9. Conclusion
 # MAGIC ### (10. Application of Course Concepts)
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC # In this notebook:
-# MAGIC ## Steps 7-10
-# MAGIC #### Data prep steps for modeling
-# MAGIC 1. retreive post-processed data from the silver data pipeline
-# MAGIC 2. apply specific cleanup required for each model (e.g. imputation)
-# MAGIC 3. add features required for each model
-# MAGIC 3. save the model-specific datasets in silver
-# MAGIC 
-# MAGIC #### Pipeline for training and evaluation (repeat for each model)
-# MAGIC 1. retrieve model-specific dataset
-# MAGIC 2. apply encodings / scaling routines
-# MAGIC 3. train model
-# MAGIC 4. evaluate model
-# MAGIC 5. repeat for next model
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC # 7. Model Exploration
 
 # COMMAND ----------
 
@@ -77,11 +59,11 @@ sqlContext = SQLContext(sc)
 
 # COMMAND ----------
 
-# MAGIC %md ### Configure access to staging areas - bronze & silver
+# MAGIC %md ### Configure access to data pipeline staging areas 
 
 # COMMAND ----------
 
-username = "kevin"
+username = "kevin2"
 dbutils.widgets.text("username", username)
 spark.sql(f"CREATE DATABASE IF NOT EXISTS airline_delays_{username}")
 spark.sql(f"USE airline_delays_{username}")
@@ -92,16 +74,13 @@ spark.conf.set("spark.sql.shuffle.partitions", 8)
 
 # COMMAND ----------
 
-
+# MAGIC %md
+# MAGIC # 6. Pre-Model Data Prep
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC # DO NOT RUN THIS BELOW - START FROM CELL 38
-
-# COMMAND ----------
-
-# MAGIC %md # Pipelining
+# MAGIC # RUN THIS NEXT SECTION ONLY ONCE - THEN START FROM CELL 44
 
 # COMMAND ----------
 
@@ -138,11 +117,10 @@ def make_imputation_dict(df):
 
 # COMMAND ----------
 
-# MAGIC %md prepare our dictionary with just values from train data
+# MAGIC %md Dictionary should be populated from train set
 
 # COMMAND ----------
 
-# doing super small just to check otherwise we will have to rerun again
 impute_dict = make_imputation_dict(train_data)
 
 # COMMAND ----------
@@ -151,7 +129,7 @@ impute_dict
 
 # COMMAND ----------
 
-# MAGIC %md now we will impute our missing values using the mean and modes found in our impute dictionary
+# MAGIC %md Impute our missing values using the mean and modes found in our impute dictionary
 
 # COMMAND ----------
 
@@ -191,6 +169,10 @@ def impute_missing_values(df, impute_dict):
 
 # COMMAND ----------
 
+# MAGIC %md Impute our training data
+
+# COMMAND ----------
+
 train_data = impute_missing_values(train_data, impute_dict)
 
 # COMMAND ----------
@@ -208,6 +190,10 @@ train_data.write.option('mergeSchema', True).mode('overwrite').format('delta').s
 # MAGIC CREATE TABLE flights_and_weather_train_processed
 # MAGIC USING DELTA
 # MAGIC LOCATION "/airline_delays/$username/DLRS/flights_and_weather_train/processed"
+
+# COMMAND ----------
+
+# MAGIC %md Impute our validation data based on values stored in our dictionary (this is unseen data)
 
 # COMMAND ----------
 
@@ -231,6 +217,10 @@ validation_data.write.option('mergeSchema', True).mode('overwrite').format('delt
 
 # COMMAND ----------
 
+# MAGIC %md Impute our test data based on values stored in our dictionary (this is unseen data)
+
+# COMMAND ----------
+
 test_data = impute_missing_values(test_data, impute_dict)
 
 # COMMAND ----------
@@ -251,10 +241,14 @@ test_data.write.option('mergeSchema', True).mode('overwrite').format('delta').sa
 
 # COMMAND ----------
 
+# MAGIC %md ### Replace all empty strings
+
+# COMMAND ----------
+
 def replace_empty_strings(df):
   cat_columns = [item[0] for item in df.dtypes if item[1].startswith('string')]  # string
     
-  # Fill the empty string values with a '_'
+  # Fill the empty string values with 'Empty'
   for x in cat_columns:                  
      df = df.withColumn(x, f.when(df[x] == '', f.lit("Empty")).otherwise(df[x]))
     
@@ -263,40 +257,49 @@ def replace_empty_strings(df):
 # COMMAND ----------
 
 train_data = replace_empty_strings(train_data)
-
-# COMMAND ----------
-
 validation_data = replace_empty_strings(validation_data)
-
-# COMMAND ----------
-
 test_data = replace_empty_strings(test_data)
 
 # COMMAND ----------
 
 train_data.write.option('mergeSchema', True).mode('overwrite').format('delta').save(flights_and_weather_train_loc + 'processed')
-
-# COMMAND ----------
-
 validation_data.write.option('mergeSchema', True).mode('overwrite').format('delta').save(flights_and_weather_validation_loc + 'processed')
-
-# COMMAND ----------
-
 test_data.write.option('mergeSchema', True).mode('overwrite').format('delta').save(flights_and_weather_test_loc + 'processed')
 
 # COMMAND ----------
 
-# MAGIC %md #START FROM HERE
+# MAGIC %md ### Drop Numeric Columns that are all Null
 
 # COMMAND ----------
 
-train_data = spark.sql("select * from flights_and_weather_train_processed")
-validation_data = spark.sql("select * from flights_and_weather_validation_processed")
-test_data = spark.sql("select * from flights_and_weather_test_processed")
+def get_cols_to_drop(impute_dict, numeric_cols):
+  colsToDrop = []
+  numeric_cols = set(numeric_cols)
+  for key, value in impute_dict.items():
+    if value == None and key in numeric_cols:
+      colsToDrop.append(key)
+  return colsToDrop
+
+numeric_cols = [item[0] for item in train_data.dtypes if item[1] in ['int', 'double']]
+cols_to_drop = get_cols_to_drop(impute_dict, numeric_cols)
+
+#cols_to_drop = ['ORIGIN_AL2_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'ORIGIN_AL3_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'ORIGIN_AL3_SNOW_ACCUMULATION_DEPTH_DIMENSION', 'ORIGIN_GA6_SKY_COVER_LAYER_BASE_HEIGHT_DIMENSION', 'ORIGIN_GD5_SKY_COVER_SUMMATION_STATE_HEIGHT_DIMENSION', 'ORIGIN_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_UPPER_RANGE_ATTRIBUTE', 'ORIGIN_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_LOWER_RANGE_ATTRIBUTE', 'ORIGIN_GG1_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'ORIGIN_GG2_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'ORIGIN_GG3_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'ORIGIN_GG4_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_AL2_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'DEST_AL3_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'DEST_AL3_SNOW_ACCUMULATION_DEPTH_DIMENSION', 'DEST_GA6_SKY_COVER_LAYER_BASE_HEIGHT_DIMENSION', 'DEST_GD5_SKY_COVER_SUMMATION_STATE_HEIGHT_DIMENSION', 'DEST_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_UPPER_RANGE_ATTRIBUTE', 'DEST_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_LOWER_RANGE_ATTRIBUTE', 'DEST_GG1_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_GG2_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_GG3_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_GG4_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION']
 
 # COMMAND ----------
 
-# MAGIC %md ### Drop Delay Columns
+train_data = train_data.drop(*cols_to_drop)
+validation_data = validation_data.drop(*cols_to_drop)
+test_data = test_data.drop(*cols_to_drop)
+
+# COMMAND ----------
+
+train_data.write.option('mergeSchema', True).mode('overwrite').format('delta').save(flights_and_weather_train_loc + 'processed')
+validation_data.write.option('mergeSchema', True).mode('overwrite').format('delta').save(flights_and_weather_validation_loc + 'processed')
+test_data.write.option('mergeSchema', True).mode('overwrite').format('delta').save(flights_and_weather_test_loc + 'processed')
+
+# COMMAND ----------
+
+# MAGIC %md ### Drop Delay Columns (revisit if we want to use a linear regression model to predict the actual time delayed)
 
 # COMMAND ----------
 
@@ -305,59 +308,26 @@ cols_to_drop = ['DEP_DELAY', 'DEP_DELAY_NEW', 'DEP_DELAY_GROUP', 'TAIL_NUM', 'OR
 # COMMAND ----------
 
 train_data = train_data.drop(*cols_to_drop)
-
-# COMMAND ----------
-
-validation_data = validation_data.drop(*cols_to_drop)
-
-# COMMAND ----------
-
-test_data = test_data.drop(*cols_to_drop)
-
-# COMMAND ----------
-
-# MAGIC %md ### Drop Columns with None or Null Values
-
-# COMMAND ----------
-
-#def get_cols_to_drop(impute_dict, numeric_cols):
-#  colsToDrop = []
-#  numeric_cols = set(numeric_cols)
-#  for key, value in impute_dict.items():
-#    if value == None and key in numeric_cols:
-#      colsToDrop.append(key)
-#  return colsToDrop
-
-#numeric_cols = [item[0] for item in train_data.dtypes if item[1] in ['int', 'double']]
-#cols_to_drop = get_cols_to_drop(impute_dict, numeric_cols)
-cols_to_drop = ['ORIGIN_AL2_SNOW_ACCUMULATION_PERIOD_QUANTITY',
- 'ORIGIN_AL3_SNOW_ACCUMULATION_PERIOD_QUANTITY',
- 'ORIGIN_AL3_SNOW_ACCUMULATION_DEPTH_DIMENSION',
- 'ORIGIN_GA6_SKY_COVER_LAYER_BASE_HEIGHT_DIMENSION',
- 'ORIGIN_GD5_SKY_COVER_SUMMATION_STATE_HEIGHT_DIMENSION',
- 'ORIGIN_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_UPPER_RANGE_ATTRIBUTE',
- 'ORIGIN_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_LOWER_RANGE_ATTRIBUTE',
- 'ORIGIN_GG1_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION',
- 'ORIGIN_GG2_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION',
- 'ORIGIN_GG3_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION',
- 'ORIGIN_GG4_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION',
- 'DEST_AL2_SNOW_ACCUMULATION_PERIOD_QUANTITY',
- 'DEST_AL3_SNOW_ACCUMULATION_PERIOD_QUANTITY',
- 'DEST_AL3_SNOW_ACCUMULATION_DEPTH_DIMENSION',
- 'DEST_GA6_SKY_COVER_LAYER_BASE_HEIGHT_DIMENSION',
- 'DEST_GD5_SKY_COVER_SUMMATION_STATE_HEIGHT_DIMENSION',
- 'DEST_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_UPPER_RANGE_ATTRIBUTE',
- 'DEST_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_LOWER_RANGE_ATTRIBUTE',
- 'DEST_GG1_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION',
- 'DEST_GG2_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION',
- 'DEST_GG3_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION',
- 'DEST_GG4_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION']
-
-# COMMAND ----------
-
-train_data = train_data.drop(*cols_to_drop)
 validation_data = validation_data.drop(*cols_to_drop)
 test_data = test_data.drop(*cols_to_drop)
+
+# COMMAND ----------
+
+train_data.write.option('mergeSchema', True).mode('overwrite').format('delta').save(flights_and_weather_train_loc + 'processed')
+validation_data.write.option('mergeSchema', True).mode('overwrite').format('delta').save(flights_and_weather_validation_loc + 'processed')
+test_data.write.option('mergeSchema', True).mode('overwrite').format('delta').save(flights_and_weather_test_loc + 'processed')
+
+# COMMAND ----------
+
+# MAGIC %md # 7. Model Exploration Pipeline
+# MAGIC 
+# MAGIC #START FROM HERE
+
+# COMMAND ----------
+
+train_data = spark.sql("select * from flights_and_weather_train_processed")
+validation_data = spark.sql("select * from flights_and_weather_validation_processed")
+test_data = spark.sql("select * from flights_and_weather_test_processed")
 
 # COMMAND ----------
 
@@ -494,10 +464,7 @@ encoding_pipeline = encoding_pipeline.fit(train_data)
 # apply the transformations to our train data
 transformed_train_data = encoding_pipeline.transform(train_data)['features', 'label']
 
-
-
 # COMMAND ----------
-
 
 # train a model on our transformed train data
 startTime = time.time()
@@ -505,8 +472,7 @@ lr = LogisticRegression(featuresCol = 'features', labelCol = 'label', maxIter = 
 model = lr.fit(transformed_train_data)
 train_preds = model.transform(transformed_train_data)
 endTime = time.time()
-print(f"The training time of the Logistic Regression model is: {(endTime - startTime) / (60)} minutes")
-                             
+print(f"The training time of the Logistic Regression model is: {(endTime - startTime) / (60)} minutes")                            
 
 # COMMAND ----------
 
@@ -568,13 +534,17 @@ def parameter_search(model, featuresCol, labelCol, dictionary):
                             evaluator=BinaryClassificationEvaluator(),
                             numFolds=2) 
 
-  cvModel = crossval.fit(transformed_train_data_sample)
+  cvModel = crossval.fit(transformed_train_data)
   return(cvModel.getEstimatorParamMaps()[np.argmax(cvModel.avgMetrics)])
 
+# COMMAND ----------
 
-
+parameters = {'maxIter': [1, 30], 'regParam' : [0.01, 0.001], 'elasticNetParam' : [0.25, 0.5, 0.1]}
+parameter_search(LogisticRegression, 'features', 'label', parameters)
 
 # COMMAND ----------
+
+#TODO: Review if this is needed?
 
 from pyspark.ml import Pipeline
 from pyspark.ml.classification import LogisticRegression
@@ -609,47 +579,59 @@ cvModel = crossval.fit(transformed_train_data_sample)
 
 # COMMAND ----------
 
-# MAGIC %md ## PageRank Features
+# MAGIC %md ## PageRank Features (PR is based on train data only)
 
 # COMMAND ----------
 
-# MAGIC %md 
-# MAGIC 
-# MAGIC joinedDf = spark.sql("SELECT * from flights_and_weather_combined_processed_baseline")
-# MAGIC display(joinedDf) 
+#PageRank
+flights_and_weather_train_processed = spark.sql("SELECT * from flights_and_weather_train_processed")
+airlineGraph = {'nodes': flights_and_weather_train_processed.select('ORIGIN', 'DEST').rdd.flatMap(list).distinct().collect(), 
+                'edges': flights_and_weather_train_processed.select('ORIGIN', 'DEST').rdd.map(tuple).collect()}
+
+directedGraph = nx.DiGraph()
+directedGraph.add_nodes_from(airlineGraph['nodes'])
+directedGraph.add_edges_from(airlineGraph['edges'])
+
+pageRank = nx.pagerank(directedGraph, alpha = 0.85)
+pandasPageRank = pd.DataFrame(pageRank.items(), columns = ['Station', 'PageRank'])
+pandasPageRank = spark.createDataFrame(pandasPageRank)
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC 
-# MAGIC airlineGraph = {'nodes': joinedDf.select('ORIGIN', 'DEST').rdd.flatMap(list).distinct().collect(), 
-# MAGIC                 'edges': joinedDf.select('ORIGIN', 'DEST').rdd.map(tuple).collect()}
-# MAGIC 
-# MAGIC directedGraph = nx.DiGraph()
-# MAGIC directedGraph.add_nodes_from(airlineGraph['nodes'])
-# MAGIC directedGraph.add_edges_from(airlineGraph['edges'])
-# MAGIC 
-# MAGIC pageRank = nx.pagerank(directedGraph, alpha = 0.85)
-# MAGIC pandasPageRank = pd.DataFrame(pageRank.items(), columns = ['Station', 'PageRank'])
-# MAGIC pandasPageRank = spark.createDataFrame(pandasPageRank)
-# MAGIC pandasPageRank.createOrReplaceTempView("pandasPageRank")
-# MAGIC joinedDf.createOrReplaceTempView("joinedDf")
-# MAGIC # Now we want to separate the pagerank for the stations based on destination and origin
-# MAGIC joinedDf = spark.sql("SELECT * from joinedDf LEFT JOIN pandasPageRank ON joinedDf.ORIGIN == pandasPageRank.Station").drop('Station')
-# MAGIC joinedDf = joinedDf.withColumnRenamed('PageRank', 'PAGERANK_ORIGIN')
-# MAGIC joinedDf.createOrReplaceTempView("joinedDf")
-# MAGIC # Repeat for Dest
-# MAGIC joinedDf = spark.sql("SELECT * from joinedDf LEFT JOIN pandasPageRank ON joinedDf.DEST == pandasPageRank.Station").drop('Station')
-# MAGIC joinedDf = joinedDf.withColumnRenamed('PageRank', 'PAGERANK_DEST')
-# MAGIC joinedDf.createOrReplaceTempView('joinedDf')
-# MAGIC display(joinedDf)
+pagerank_origin = pandasPageRank.withColumnRenamed('Station','ORIGIN_IATA').withColumnRenamed('PageRank','ORIGIN_PAGERANK')
+pagerank_dest= pandasPageRank.withColumnRenamed('Station','DEST_IATA').withColumnRenamed('PageRank','DEST_PAGERANK')
 
 # COMMAND ----------
 
-# MAGIC %md 
-# MAGIC page_rank_cleaned_data_with_missing_values_corrected = correct_missing_codes(spark.sql("SELECT * FROM joinedDf"))
-# MAGIC page_rank_data_ready_for_model = impute_missing_values(page_rank_cleaned_data_with_missing_values_corrected)
-# MAGIC page_rank_data_ready_for_model.createOrReplaceTempView('page_rank_data_ready_for_model')
+pagerank_loc = f"/airline_delays/{username}/DLRS/pagerank/"
+
+dbutils.fs.rm(pagerank_loc + 'origin', recurse=True)
+dbutils.fs.rm(pagerank_loc + 'dest', recurse=True)
+
+# COMMAND ----------
+
+pagerank_origin.write.option('mergeSchema', True).mode('overwrite').format('delta').save(pagerank_loc + 'origin')
+pagerank_dest.write.option('mergeSchema', True).mode('overwrite').format('delta').save(pagerank_loc + 'dest')
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC 
+# MAGIC DROP TABLE IF EXISTS pagerank_origin;
+# MAGIC 
+# MAGIC CREATE TABLE pagerank_origin
+# MAGIC USING DELTA
+# MAGIC LOCATION "/airline_delays/$username/DLRS/pagerank/origin"
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC 
+# MAGIC DROP TABLE IF EXISTS pagerank_dest;
+# MAGIC 
+# MAGIC CREATE TABLE pagerank_dest
+# MAGIC USING DELTA
+# MAGIC LOCATION "/airline_delays/$username/DLRS/pagerank/dest"
 
 # COMMAND ----------
 
@@ -657,15 +639,13 @@ cvModel = crossval.fit(transformed_train_data_sample)
 
 # COMMAND ----------
 
-#cols_to_drop = ['DEP_DELAY', 'DEP_DELAY_NEW', 'DEP_DELAY_GROUP']
-cols_to_drop2 = ['DEP_DELAY', 'DEP_DELAY_NEW', 'DEP_DELAY_GROUP', 'TAIL_NUM', 'ORIGIN_CITY_NAME', 'DEST_CITY_NAME', 'FL_DATE', 'ORIGIN_WEATHER_KEY', 'DEST_WEATHER_KEY', 'ORIGIN_IATA', 'DEST_IATA']
 join_statement = " JOIN pagerank_origin op ON op.ORIGIN_IATA = f.ORIGIN JOIN pagerank_dest dp ON dp.DEST_IATA = f.DEST"
 
 # COMMAND ----------
 
-train_data = spark.sql("SELECT * FROM flights_and_weather_train_processed f" + join_statement).drop(*cols_to_drop).drop(*cols_to_drop2)
-validation_data = spark.sql("SELECT * FROM flights_and_weather_validation_processed f" + join_statement).drop(*cols_to_drop).drop(*cols_to_drop2)
-test_data = spark.sql("SELECT * FROM flights_and_weather_test_processed f" + join_statement).drop(*cols_to_drop).drop(*cols_to_drop2)
+train_data = spark.sql("SELECT * FROM flights_and_weather_train_processed f" + join_statement)
+validation_data = spark.sql("SELECT * FROM flights_and_weather_validation_processed f" + join_statement)
+test_data = spark.sql("SELECT * FROM flights_and_weather_test_processed f" + join_statement)
 
 # COMMAND ----------
 
