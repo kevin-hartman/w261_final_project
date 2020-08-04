@@ -105,7 +105,7 @@ sqlContext = SQLContext(sc)
 
 # COMMAND ----------
 
-username = "kevin"
+username = "kevin2"
 dbutils.widgets.text("username", username)
 spark.sql(f"CREATE DATABASE IF NOT EXISTS airline_delays_{username}")
 spark.sql(f"USE airline_delays_{username}")
@@ -2867,16 +2867,16 @@ weather_processed = correct_missing_codes(weather_processed, '', cols_to_split)
 
 # COMMAND ----------
 
-display(weather_sample)
+#display(weather_sample)
 
 # COMMAND ----------
 
-weather_sample = weather_processed.where('WEATHER_DATE >= TO_DATE("01/01/2015", "MM/dd/yyyy") AND WEATHER_DATE <= TO_DATE("03/31/2015", "MM/dd/yyyy")')
-num_hours = 3
-for group, cols in cols_to_split.items():
-    for col, col_properties in cols.items():
-        if col_properties['data_type'] == 'int':
-            weather_sample = calculate_rolling_average(weather_sample, num_hours, col)
+#weather_sample = weather_processed.where('WEATHER_DATE >= TO_DATE("01/01/2015", "MM/dd/yyyy") AND WEATHER_DATE <= TO_DATE("03/31/2015", "MM/dd/yyyy")')
+#num_hours = 3
+#for group, cols in cols_to_split.items():
+#    for col, col_properties in cols.items():
+#        if col_properties['data_type'] == 'int':
+#            weather_sample = calculate_rolling_average(weather_sample, num_hours, col)
 
 # COMMAND ----------
 
@@ -3032,7 +3032,7 @@ spark.sql('SELECT * FROM flights_and_weather_ra_origin LIMIT 1').dtypes
 
 # COMMAND ----------
 
-# MAGIC %sql CREATE OR REPLACE TABLE flights_and_weather_origin_renamed USING DELTA LOCATION '/airline_delays/$username/DLRS/flights_and_weather_origin_renamed/processed' AS
+# MAGIC %sql CREATE OR REPLACE TABLE flights_and_weather_ra_origin_renamed USING DELTA LOCATION '/airline_delays/$username/DLRS/flights_and_weather_ra_origin_renamed/processed' AS
 # MAGIC SELECT  fp.YEAR,
 # MAGIC         fp.QUARTER,
 # MAGIC         fp.MONTH,
@@ -3560,7 +3560,6 @@ spark.sql('SELECT * FROM flights_and_weather_ra_origin LIMIT 1').dtypes
 # MAGIC         fp.DEST_GROUND_SURFACE_OBSERVATION_QUALITY_CODE,
 # MAGIC         fp.DEST_WIND_GUST_OBSERVATION_SPEED_RATE,
 # MAGIC         fp.DEST_WIND_GUST_OBSERVATION_QUALITY_CODE,
-# MAGIC         
 # MAGIC        fp.WEATHER_STATION as ORIGIN_WEATHER_STATION,
 # MAGIC        fp.WEATHER_SOURCE as ORIGIN_WEATHER_SOURCE,
 # MAGIC        fp.WEATHER_LAT as ORIGIN_WEATHER_LAT,fp.WEATHER_LON as ORIGIN_WEATHER_LON,fp.WEATHER_ELEV as ORIGIN_WEATHER_ELEV,
@@ -3623,7 +3622,7 @@ spark.sql('SELECT * FROM flights_and_weather_ra_origin LIMIT 1').dtypes
 # MAGIC        fp.GG4 as ORIGIN_GG4,fp.AB1 as ORIGIN_AB1,fp.AH5 as ORIGIN_AH5,
 # MAGIC        fp.CN3 as ORIGIN_CN3,fp.WEATHER_DATE as ORIGIN_WEATHER_DATE,
 # MAGIC        fp.DEST_WEATHER_KEY
-# MAGIC FROM   flights_and_weather_origin fp 
+# MAGIC FROM   flights_and_weather_ra_origin fp 
 
 # COMMAND ----------
 
@@ -3637,58 +3636,6 @@ spark.sql('SELECT * FROM flights_and_weather_ra_origin LIMIT 1').dtypes
 
 # MAGIC %md
 # MAGIC ### PageRank Feature!
-
-# COMMAND ----------
-
-#PageRank
-flights_and_weather_train_processed = spark.sql("SELECT * from flights_and_weather_train_processed")
-airlineGraph = {'nodes': flights_and_weather_train_processed.select('ORIGIN', 'DEST').rdd.flatMap(list).distinct().collect(), 
-                'edges': flights_and_weather_train_processed.select('ORIGIN', 'DEST').rdd.map(tuple).collect()}
-
-directedGraph = nx.DiGraph()
-directedGraph.add_nodes_from(airlineGraph['nodes'])
-directedGraph.add_edges_from(airlineGraph['edges'])
-
-pageRank = nx.pagerank(directedGraph, alpha = 0.85)
-pandasPageRank = pd.DataFrame(pageRank.items(), columns = ['Station', 'PageRank'])
-pandasPageRank = spark.createDataFrame(pandasPageRank)
-
-# COMMAND ----------
-
-pagerank_origin = pandasPageRank.withColumnRenamed('Station','ORIGIN_IATA').withColumnRenamed('PageRank','ORIGIN_PAGERANK')
-pagerank_dest= pandasPageRank.withColumnRenamed('Station','DEST_IATA').withColumnRenamed('PageRank','DEST_PAGERANK')
-
-# COMMAND ----------
-
-pagerank_loc = f"/airline_delays/{username}/DLRS/pagerank/"
-
-dbutils.fs.rm(pagerank_loc + 'origin', recurse=True)
-dbutils.fs.rm(pagerank_loc + 'dest', recurse=True)
-
-# COMMAND ----------
-
-pagerank_origin.write.option('mergeSchema', True).mode('overwrite').format('delta').save(pagerank_loc + 'origin')
-pagerank_dest.write.option('mergeSchema', True).mode('overwrite').format('delta').save(pagerank_loc + 'dest')
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC 
-# MAGIC DROP TABLE IF EXISTS pagerank_origin;
-# MAGIC 
-# MAGIC CREATE TABLE pagerank_origin
-# MAGIC USING DELTA
-# MAGIC LOCATION "/airline_delays/$username/DLRS/pagerank/origin"
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC 
-# MAGIC DROP TABLE IF EXISTS pagerank_dest;
-# MAGIC 
-# MAGIC CREATE TABLE pagerank_dest
-# MAGIC USING DELTA
-# MAGIC LOCATION "/airline_delays/$username/DLRS/pagerank/dest"
 
 # COMMAND ----------
 
