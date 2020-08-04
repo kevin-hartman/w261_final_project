@@ -319,6 +319,10 @@ test_data.write.option('mergeSchema', True).mode('overwrite').format('delta').sa
 
 # COMMAND ----------
 
+print(flights_and_weather_train_loc + 'processed')
+
+# COMMAND ----------
+
 # MAGIC %md # 7. Model Exploration Pipeline
 # MAGIC 
 # MAGIC #START FROM HERE
@@ -328,6 +332,12 @@ test_data.write.option('mergeSchema', True).mode('overwrite').format('delta').sa
 train_data = spark.sql("select * from flights_and_weather_train_processed")
 validation_data = spark.sql("select * from flights_and_weather_validation_processed")
 test_data = spark.sql("select * from flights_and_weather_test_processed")
+
+cols_to_drop = ['DEP_DELAY', 'DEP_DELAY_NEW', 'DEP_DELAY_GROUP', 'TAIL_NUM', 'ORIGIN_CITY_NAME', 'DEST_CITY_NAME', 'FL_DATE', 'ORIGIN_WEATHER_KEY', 'DEST_WEATHER_KEY', 'ORIGIN_AL2_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'ORIGIN_AL3_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'ORIGIN_AL3_SNOW_ACCUMULATION_DEPTH_DIMENSION', 'ORIGIN_GA6_SKY_COVER_LAYER_BASE_HEIGHT_DIMENSION', 'ORIGIN_GD5_SKY_COVER_SUMMATION_STATE_HEIGHT_DIMENSION', 'ORIGIN_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_UPPER_RANGE_ATTRIBUTE', 'ORIGIN_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_LOWER_RANGE_ATTRIBUTE', 'ORIGIN_GG1_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'ORIGIN_GG2_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'ORIGIN_GG3_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'ORIGIN_GG4_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_AL2_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'DEST_AL3_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'DEST_AL3_SNOW_ACCUMULATION_DEPTH_DIMENSION', 'DEST_GA6_SKY_COVER_LAYER_BASE_HEIGHT_DIMENSION', 'DEST_GD5_SKY_COVER_SUMMATION_STATE_HEIGHT_DIMENSION', 'DEST_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_UPPER_RANGE_ATTRIBUTE', 'DEST_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_LOWER_RANGE_ATTRIBUTE', 'DEST_GG1_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_GG2_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_GG3_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_GG4_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION']
+
+train_data = train_data.drop(*cols_to_drop)
+validation_data = validation_data.drop(*cols_to_drop)
+test_data = test_data.drop(*cols_to_drop)
 
 # COMMAND ----------
 
@@ -444,17 +454,9 @@ def showPR(model_results):
 
 # COMMAND ----------
 
-# from pyspark.ml.evaluation import BinaryClassificationEvaluator
-# evaluator = BinaryClassificationEvaluator()
-# evaluation = evaluator.evaluate(train_preds)
-# print("evaluation (area under ROC): %f" % evaluation)
-
-
-# COMMAND ----------
-
 # MAGIC %md # Model 1: Baseline Evaluation (Logistic Regression)
 # MAGIC 
-# MAGIC Set up and run the pipeline for the baseline model
+# MAGIC Set up and run the pipeline for the baseline model (this has the kitchen sink and all our weather columns this time)
 
 # COMMAND ----------
 
@@ -472,7 +474,7 @@ lr = LogisticRegression(featuresCol = 'features', labelCol = 'label', maxIter = 
 model = lr.fit(transformed_train_data)
 train_preds = model.transform(transformed_train_data)
 endTime = time.time()
-print(f"The training time of the Logistic Regression model is: {(endTime - startTime) / (60)} minutes")                            
+print(f"The training time of the Logistic Regression model is: {(endTime - startTime) / (60)} minutes")                    
 
 # COMMAND ----------
 
@@ -499,8 +501,6 @@ transformed_validation_data = encoding_pipeline.transform(validation_data)['feat
 # run the fitted model on the transformed validation data
 validation_preds = model.transform(transformed_validation_data)
 
-# COMMAND ----------
-
 # display our evaluation metrics
 validation_metrics = evaluation_metrics(validation_preds, "Logistic Regression on validation data")
 display(validation_metrics)
@@ -517,7 +517,7 @@ from pyspark.ml.classification import LogisticRegression
 from pyspark.ml.evaluation import BinaryClassificationEvaluator
 from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
 
-def parameter_search(model, featuresCol, labelCol, dictionary):
+def parameter_search(model, featuresCol, labelCol, dictionary, data):
   mod = model(featuresCol = featuresCol, labelCol = labelCol)
   pipeline = Pipeline(stages=[mod])
   
@@ -534,17 +534,26 @@ def parameter_search(model, featuresCol, labelCol, dictionary):
                             evaluator=BinaryClassificationEvaluator(),
                             numFolds=2) 
 
-  cvModel = crossval.fit(transformed_train_data)
+  cvModel = crossval.fit(data)
   return(cvModel.getEstimatorParamMaps()[np.argmax(cvModel.avgMetrics)])
 
 # COMMAND ----------
 
 parameters = {'maxIter': [1, 30], 'regParam' : [0.01, 0.001], 'elasticNetParam' : [0.25, 0.5, 0.1]}
-parameter_search(LogisticRegression, 'features', 'label', parameters)
+parameter_search(LogisticRegression, 'features', 'label', parameters, transformed_train_data.sample(False, 0.005))
 
 # COMMAND ----------
 
-#TODO: Review if this is needed?
+# MAGIC %md
+# MAGIC     # Results
+# MAGIC     {Param(parent='LogisticRegression_6a0dd178a09d', name='maxIter', doc='max number of iterations (>= 0).'): 30,
+# MAGIC      Param(parent='LogisticRegression_6a0dd178a09d', name='regParam', doc='regularization parameter (>= 0).'): 0.01,
+# MAGIC      Param(parent='LogisticRegression_6a0dd178a09d', name='elasticNetParam',
+# MAGIC      doc='the ElasticNet mixing parameter, in range [0, 1]. For alpha = 0, the penalty is an L2 penalty. For alpha = 1, it is an L1 penalty.'): 0.5}
+
+# COMMAND ----------
+
+#TODO: Review is this is needed?
 
 from pyspark.ml import Pipeline
 from pyspark.ml.classification import LogisticRegression
@@ -572,6 +581,43 @@ cvModel = crossval.fit(transformed_train_data_sample)
 
 
 
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### LR Model using results from parameter search
+
+# COMMAND ----------
+
+# Using results from our parameter search
+startTime = time.time()
+lr = LogisticRegression(featuresCol = 'features', labelCol = 'label', maxIter = 30, regParam = 0.01, elasticNetParam = 0.5, standardization = False)
+model = lr.fit(transformed_train_data)
+train_preds = model.transform(transformed_train_data)
+endTime = time.time()
+print(f"The training time of the Logistic Regression model is: {(endTime - startTime) / (60)} minutes")
+train_metrics = evaluation_metrics(train_preds, "Logistic Regression on training data")
+display(train_metrics)
+
+# COMMAND ----------
+
+display(model, train_preds, plotType="ROC")
+
+# COMMAND ----------
+
+AUC(model, train_preds)
+ROC(model, train_preds)
+
+# COMMAND ----------
+
+# apply the encoding transformations from our pipeline to the validation data
+transformed_validation_data = encoding_pipeline.transform(validation_data)['features', 'label']
+
+# run the fitted model on the transformed validation data
+validation_preds = model.transform(transformed_validation_data)
+# display our evaluation metrics
+validation_metrics = evaluation_metrics(validation_preds, "Logistic Regression on validation data")
+display(validation_metrics)
 
 # COMMAND ----------
 
@@ -643,17 +689,17 @@ join_statement = " JOIN pagerank_origin op ON op.ORIGIN_IATA = f.ORIGIN JOIN pag
 
 # COMMAND ----------
 
-train_data = spark.sql("SELECT * FROM flights_and_weather_train_processed f" + join_statement)
-validation_data = spark.sql("SELECT * FROM flights_and_weather_validation_processed f" + join_statement)
-test_data = spark.sql("SELECT * FROM flights_and_weather_test_processed f" + join_statement)
+train_data_pr = spark.sql("SELECT * FROM flights_and_weather_train_processed f" + join_statement).drop(*cols_to_drop)
+validation_data_pr = spark.sql("SELECT * FROM flights_and_weather_validation_processed f" + join_statement).drop(*cols_to_drop)
+test_data_pr = spark.sql("SELECT * FROM flights_and_weather_test_processed f" + join_statement).drop(*cols_to_drop)
 
 # COMMAND ----------
 
 # create an encoding pipeline based on information from our training data
-encoding_pipeline = Pipeline(stages = create_encoding_stages(train_data,'DEP_DEL15')).fit(train_data)
+encoding_pipeline = Pipeline(stages = create_encoding_stages(train_data,'DEP_DEL15')).fit(train_data_pr)
 
 # apply the transformations to our train data
-transformed_train_data = encoding_pipeline.transform(train_data)['features', 'label']
+transformed_train_data = encoding_pipeline.transform(train_data_pr)['features', 'label']
 
 
 # train a model on our transformed train data
@@ -676,17 +722,49 @@ display(train_metrics)
 
 # COMMAND ----------
 
+
+
+# COMMAND ----------
+
 # apply the encoding transformations from our pipeline to the validation data
-transformed_validation_data = encoding_pipeline.transform(validation_data)['features', 'label']
+transformed_validation_data = encoding_pipeline.transform(validation_data_pr)['features', 'label']
 
 # run the fitted model on the transformed validation data
 validation_preds = model.transform(transformed_validation_data)
 
-# COMMAND ----------
-
 # display our evaluation metrics
 validation_metrics = evaluation_metrics(validation_preds, "Logistic Regression for PageRank Validation")
 display(validation_metrics)
+
+# COMMAND ----------
+
+# MAGIC %md # Gradient-Boosted Trees with PR
+
+# COMMAND ----------
+
+startTime = time.time()
+gbt = GBTClassifier(labelCol = "label", featuresCol = "features", maxIter = 10)
+gbt_model = gbt.fit(transformed_train_data)
+train_preds = gbt_model.transform(transformed_train_data)
+endTime = time.time()
+print(f"The training time of the Gradient-Boosted Tree model is: {(endTime - startTime) / (60)} minutes")
+train_metrics = evaluation_metrics(train_preds, "Gradient-Boosted Trees on training data")
+display(train_metrics)
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+#transformed_validation_data = encoding_pipeline.transform(validation_data)['features', 'label']
+validation_preds = model.transform(transformed_validation_data)
+validation_metrics = evaluation_metrics(validation_preds, "Gradient-Boosted Trees on validation data")
+display(validation_metrics)
+
+# COMMAND ----------
+
+
 
 # COMMAND ----------
 
@@ -768,31 +846,3 @@ display(train_metrics)
 validation_preds = model.transform(transformed_validation_data)
 validation_metrics = evaluation_metrics(validation_preds, "Random Forest on validation data")
 display(validation_metrics)
-
-# COMMAND ----------
-
-# MAGIC %md # Gradient-Boosted Trees
-
-# COMMAND ----------
-
-startTime = time.time()
-gbt = GBTClassifier(labelCol = "label", featuresCol = "features", maxIter = 10)
-gbt_model = gbt.fit(transformed_train_data)
-train_preds = gbt_model.transform(transformed_train_data)
-endTime = time.time()
-print(f"The training time of the Gradient-Boosted Tree model is: {(endTime - startTime) / (60)} minutes")
-
-# COMMAND ----------
-
-train_metrics = evaluation_metrics(train_preds, "Gradient-Boosted Trees on training data")
-display(train_metrics)
-
-# COMMAND ----------
-
-#transformed_validation_data = encoding_pipeline.transform(validation_data)['features', 'label']
-validation_preds = model.transform(transformed_validation_data)
-validation_metrics = evaluation_metrics(validation_preds, "Gradient-Boosted Trees on validation data")
-display(validation_metrics)
-
-# COMMAND ----------
-
