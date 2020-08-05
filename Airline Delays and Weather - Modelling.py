@@ -125,10 +125,6 @@ impute_dict = make_imputation_dict(train_data)
 
 # COMMAND ----------
 
-impute_dict
-
-# COMMAND ----------
-
 # MAGIC %md Impute our missing values using the mean and modes found in our impute dictionary
 
 # COMMAND ----------
@@ -722,10 +718,6 @@ display(train_metrics)
 
 # COMMAND ----------
 
-
-
-# COMMAND ----------
-
 # apply the encoding transformations from our pipeline to the validation data
 transformed_validation_data = encoding_pipeline.transform(validation_data_pr)['features', 'label']
 
@@ -735,30 +727,6 @@ validation_preds = model.transform(transformed_validation_data)
 # display our evaluation metrics
 validation_metrics = evaluation_metrics(validation_preds, "Logistic Regression for PageRank Validation")
 display(validation_metrics)
-
-# COMMAND ----------
-
-
-
-# COMMAND ----------
-
-
-
-# COMMAND ----------
-
-
-
-# COMMAND ----------
-
-
-
-# COMMAND ----------
-
-
-
-# COMMAND ----------
-
-
 
 # COMMAND ----------
 
@@ -777,18 +745,10 @@ display(train_metrics)
 
 # COMMAND ----------
 
-
-
-# COMMAND ----------
-
 #transformed_validation_data = encoding_pipeline.transform(validation_data)['features', 'label']
 validation_preds = gbt_model.transform(transformed_validation_data)
 validation_metrics = evaluation_metrics(validation_preds, "Gradient-Boosted Trees on validation data")
 display(validation_metrics)
-
-# COMMAND ----------
-
-
 
 # COMMAND ----------
 
@@ -911,7 +871,7 @@ test_data = test_data.drop(*cols_to_drop)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Logisitic Regression
+# MAGIC ## Logistic Regression
 
 # COMMAND ----------
 
@@ -967,7 +927,7 @@ ROC(model, validation_preds)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC Gradient Boosted Trees
+# MAGIC ### Gradient Boosted Trees
 
 # COMMAND ----------
 
@@ -1015,7 +975,7 @@ display(lr_pca_train_metrics)
 # COMMAND ----------
 
 #transform validation data
-pca_transformed_test_data = pca_model.transform(transformed_validation_data)
+pca_transformed_validation_data = pca_model.transform(transformed_validation_data)
 
 # COMMAND ----------
 
@@ -1027,6 +987,18 @@ lr_pca_validation_preds = lr_pca_model.transform(pca_transformed_validation_data
 # display our evaluation metrics
 lr_pca_validation_metrics = evaluation_metrics(lr_pca_validation_preds, "Logistic Regression on validation data")
 display(lr_pca_validation_metrics)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC # Conclusion
+# MAGIC Write up your results  
+# MAGIC What worked, what didn’t? Include a comparison chart of things tried.  
+# MAGIC What did you learn?  
+# MAGIC What kind of scalability issues did you encounter, and how did you solve them?  
+# MAGIC How long did your model take to run?  
+# MAGIC What did you do to optimize the training time?   
+# MAGIC Given the dataset and problem you chose, how important is the training time? Ie, does the data change frequently? Do we need real-time results? How frequently will this model need to be retrained?
 
 # COMMAND ----------
 
