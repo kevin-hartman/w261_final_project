@@ -10,36 +10,15 @@
 # COMMAND ----------
 
 # MAGIC %md # Table of Contents
-# MAGIC ### 1. Introduction
 # MAGIC ### 2. Data Sources
 # MAGIC ### 3. Data Lake Prep
 # MAGIC ### 4. Exploratory Data Analysis
 # MAGIC ### 5. Data Wrangling, Cleanup and Prep
 # MAGIC ### 6. Model Exploration (Pipeline)
-# MAGIC #### a. Feature Selection
-# MAGIC #### b. Feature Engineering
-# MAGIC #### c. Transformations (Encoding & Scaling)
-# MAGIC #### d. Evaluation
-
-# COMMAND ----------
-
-# MAGIC %md # 1. Introduction
-# MAGIC 
-# MAGIC ## Objective
-# MAGIC Our goal is to understand flight delays given information about the flight, and surrounding weather information. Flight delays are common, however, then can be a result of various amount of factors. We want to identify what these features may be, and create a model that can accurately predict whether the flight will be delayed by atleast 15 minutes, or not. We attempt to use multiple models, as well as hyperparameter turning to get our final result.
-# MAGIC 
-# MAGIC ## Testing Approach 
-# MAGIC We decided to partition our dataset by years, where our training dataset consisted of data from 2015-2017, our validation data is from 2018, and our testing data is from 2019. The reason we split the data like this is because we don't want to to use future data to predict past data.  Furthermore, it is essential that all of the testing data is not sampled from any data that is in the future, for otherwise the model would not be practically useful.  
-# MAGIC 
-# MAGIC Note for the evaluation metric that is used, it appears that other literature on this topic have used the accuracy metric as the ideal metric to gauge model performance (Ye, 2020, Abdulwahab, 2020).  Therefore, our team has also decided to adopt accuracy as the de facto metric of comparison to determine which model is performing the best.  In addition, while it is important to minimize both the number of false positives and false negatives, our group has decided to prioritize minimizing the number of false positives, as we do not want to tell an individual that there is a delay when there actually is not a delay, as that could cause the individual to miss the flight which is the worst possible scenario.  Indeed, even if there a large number of false negatives, which implies that we tell the individual that there is a delay even though there is not a delay, then this outcome does not have as a negative impact on the user compared to them potentially missing their flight.  
-# MAGIC 
-# MAGIC ## Baseline Model
-# MAGIC For our baseline model, we decided to use a logistic regression model which just predicts on the binary variable of a delay greater than 15 minutes (DEP_DEL15).  This raw model was able to produce an accuracy score of 0.8154 on the validation data, but it unfortunately predicted a fairly large number of false positives, namely 4053.  This is large with respect to other baseline model of random forest, which produced a similar accuracy score of 0.8156.  However, it produced a much smaller number of false positives, namely 426.
-# MAGIC 
-# MAGIC Overall, in order to be practically useful, our model should have an accuracy score that exceeds 0.8 with a miniscule number of false positives.  If there are a large number of false positives, then the veracity of our model is incredibly questionable.  
-# MAGIC 
-# MAGIC ## Limitations
-# MAGIC Some of the limitations of our model include our model not predicting on different severities of delay.  From a user perspective, it is more beneficial have different levels of delay based on how long their will be a delay.  By only predicting whether there is a delay or not, it is difficult for the individual to truly manage their schedule to accomodate for the flight delay.  This distinction between different magnitudes of delay will especially have prominent impacts on airports that have a lot of traffic.
+# MAGIC ####  a. Feature Selection
+# MAGIC ####  b. Feature Engineering
+# MAGIC ####  c. Transformations (Encoding & Scaling)
+# MAGIC ####  d. Evaluation
 
 # COMMAND ----------
 
@@ -60,7 +39,7 @@
 # COMMAND ----------
 
 # MAGIC %md # 3. Data Lake Prep
-# MAGIC Note that our group worked with the Delta Lake.  The Delta Lake brings reliability, performance, and lifecycle management to data lakes. The pitch with Delta Lake is that there is no more malformed data ingestion, difficulty deleting data for compliance, or issues modifying data for change data capture.  The Delta Lake allowed us to establish different versions of our data - bronze, silver, and gold - while allowing us to read and write data concurrently with ACID Transactions.  Bronze data is the raw data in the native format upon ingestion, silver data is sanitized and cleaned data, and finally, our gold data is the data that is pushed to our Delta Lake for modeling use.  Moreover, the Delta Lake transaction log records details about any changes made to our data, providing us with a full audit history.  
+# MAGIC Our group worked with the Delta Lake.  The Delta Lake brings reliability, performance, and lifecycle management to data lakes. The pitch with Delta Lake is that there is no more malformed data ingestion, difficulty deleting data for compliance, or issues modifying data for change data capture.  The Delta Lake allowed us to establish different versions of our data - bronze, silver, and gold (when productionalized) - while allowing us to read and write data concurrently with ACID Transactions.  Bronze data is the raw data in the native format upon ingestion, silver data is sanitized and cleaned data, and finally, our gold data is the data that is pushed to our Delta Lake for production model use.  Moreover, the Delta Lake transaction log records details about any changes made to our data, providing us with a full audit history (yes, we did use it to go back to other versions)
 # MAGIC 
 # MAGIC **The setup for the Delta Lake and the initial imports are shown below:**
 
@@ -118,14 +97,6 @@ weather_loc = f"/airline_delays/{username}/DLRS/weather/"
 stations_loc = f"/airline_delays/{username}/DLRS/stations/"
 
 spark.conf.set("spark.sql.shuffle.partitions", 8)
-
-# COMMAND ----------
-
-# MAGIC %md # WARNING: DO NOT RUN CODE IN THE NEXT SECTION UNLESS YOU NEED TO RECONSTRUCT THE BRONZE AND SILVER  DATA LAKES
-# MAGIC 
-# MAGIC 
-# MAGIC 
-# MAGIC ### Please start execution from Section 4. EDA to load from already processed (silver) data
 
 # COMMAND ----------
 
@@ -382,7 +353,7 @@ DeltaTable.convertToDelta(spark, parquet_table, partitioning_scheme)
 
 # COMMAND ----------
 
-# We'll distribute weather data across 15195 partitions
+# We'll distribute weather data across 15195 partitions (the number of weather stations)
 spark.conf.set("spark.sql.shuffle.partitions", 15195)
 
 # COMMAND ----------
@@ -533,7 +504,7 @@ spark.conf.set("spark.sql.shuffle.partitions", 8)
 
 # MAGIC %md # 4. EDA
 # MAGIC 
-# MAGIC We did EDA on two main datasets.  We did it on the flights dataset, and we also did it on the weather dataset.  Note that we created a custom EDA function that provides counts on key metrics such as unique and missing values along with associated mean, minimums, and maximums for each column.  The function also provided bar graphs for each component of each feature (e.g counts for the number of records in each month).
+# MAGIC We performed EDA on two main datasets: The flights dataset, and the weather dataset.  We also created a custom EDA function that provides counts on key metrics such as unique and missing values along with associated mean, minimums, and maximums for each column.  The function also provided bar graphs for each component of each feature (e.g counts for the number of records in each month).
 
 # COMMAND ----------
 
@@ -757,7 +728,7 @@ analyzer.print_eda_summary()
 
 # COMMAND ----------
 
-# MAGIC %md Based on the output from above, there does not appear to much predictive value from the columns of above.  However, we are able to see the distribution of values for each of the features.  It will be interesting to see the output of this function on the weather data.
+# MAGIC %md Based on the output from above, there does not appear to much predictive value from the columns of above.  However, we are able to see the distribution of values for each of the features.  It will be interesting to see the output of this function when we tie in the weather data.
 # MAGIC 
 # MAGIC Let's take a look at a heatmap:
 
@@ -2103,7 +2074,7 @@ flights_and_weather_pipeline_processed = spark.sql("SELECT * FROM flights_and_we
 
 # COMMAND ----------
 
-# MAGIC %md ## Clean up comma delimited columns
+# MAGIC %md ## Clean up comma delimited columns and extract their values from the weather data
 
 # COMMAND ----------
 
@@ -2778,6 +2749,11 @@ flights_and_weather_pipeline_processed.write.option('mergeSchema', True).mode('o
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC Because the flights do not have every weather record, we have to calculate the rolling averages on the actual weather data and then join them later. Unfortunately, that requires a bit more work. First, we have to run the same column splits and drops we performed on the combined data on the weather data. Then we can calculate the rolling averages on all the numeric data, create a sub-table with just these averages, and finally join it to the combined dataset.
+
+# COMMAND ----------
+
 def calculate_rolling_average(df, num_hours, avg_col):
     '''calculates the rolling average of avg_col over num_hours'''
     
@@ -2789,11 +2765,6 @@ def calculate_rolling_average(df, num_hours, avg_col):
     df = df.withColumn(f'{avg_col}_{num_hours}_RA',f.avg(avg_col).over(w))
     
     return df
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC Because the flights do not have every weather record, we have to calculate the rolling averages on the actual weather data and then join them later. Unfortunately, that requires a bit more work. First, we have to run the same column splits and drops we performed on the combined data on the weather data. Then we can calculate the rolling averages on all the numeric data, create a sub-table with just these averages, and finally join it to the combined dataset.
 
 # COMMAND ----------
 
@@ -2858,35 +2829,7 @@ weather_processed = correct_missing_codes(weather_processed, '', cols_to_split)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC Now that we have eliminated the un-needed columns, we can calculate rolling averages for all the numeric fields
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC #### BEGIN ROLLING AVERAGE TEST ON SAMPLE (DELETE LATER)
-
-# COMMAND ----------
-
-display(weather_sample)
-
-# COMMAND ----------
-
-weather_sample = weather_processed.where('WEATHER_DATE >= TO_DATE("01/01/2015", "MM/dd/yyyy") AND WEATHER_DATE <= TO_DATE("03/31/2015", "MM/dd/yyyy")')
-num_hours = 3
-for group, cols in cols_to_split.items():
-    for col, col_properties in cols.items():
-        if col_properties['data_type'] == 'int':
-            weather_sample = calculate_rolling_average(weather_sample, num_hours, col)
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC #### END ROLLING AVERAGE TEST ON SAMPLE (DELETE LATER)
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC Now we need to subset our weather data to only the stations we care about to save processing time.
+# MAGIC Now that we have eliminated the un-needed columns, we can calculate rolling averages for all the numeric fields. We need to subset our weather data to only the stations we care about to save processing time.
 
 # COMMAND ----------
 
@@ -4269,7 +4212,7 @@ spark.sql('SELECT * FROM flights_and_weather_ra_origin LIMIT 1').columns
 
 # MAGIC %md
 # MAGIC ### Split Data into Train/Test/Validation
-# MAGIC TODO: Move to other notebook if we want to keep the train/validation/test feature engineering together
+# MAGIC Required to impute missing values from our newly engineered features just off of train data
 
 # COMMAND ----------
 
@@ -4395,6 +4338,142 @@ validation_data.write.option('mergeSchema', True).mode('overwrite').format('delt
 # MAGIC CREATE TABLE flights_and_weather_test_ra_processed
 # MAGIC USING DELTA
 # MAGIC LOCATION "/airline_delays/$username/DLRS/flights_and_weather_ra_test/processed"
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC #### We are done. Now we can examine our newly minted features and do some additional limited EDA for feature selection.
+
+# COMMAND ----------
+
+
+# Enable Arrow-based columnar data transfers
+spark.conf.set("spark.sql.execution.arrow.enabled", "true")
+
+# COMMAND ----------
+
+flights_sample_panda_df = spark.sql("SELECT * FROM flights_and_weather_pipeline_processed WHERE YEAR IN (2015, 2016, 2017)").drop('YEAR').sample(True,0.001)
+
+# COMMAND ----------
+
+display(flights_sample_panda_df)
+
+# COMMAND ----------
+
+df = flights_sample_panda_df.toPandas()
+
+# COMMAND ----------
+
+sns.set(rc={'figure.figsize':(100,100)})
+sns.heatmap(df.corr(), cmap='RdBu_r', annot=True, center=0.0)
+sns.set(rc={'figure.figsize':(10,10)})
+
+# COMMAND ----------
+
+train_label = df['DEP_DEL15'].astype(int)
+
+# COMMAND ----------
+
+train_data = df.drop(columns='DEP_DEL15')
+
+# COMMAND ----------
+
+ #find columns that correlate with the label
+correlated_cols=[]
+for col in train_data.columns:
+  try:
+    corr = train_label.corr(train_data[col])
+    if(corr > 0.045  or corr < -0.045):
+      star='(*)' # flag the highly correlated numeric variables
+      correlated_cols.append(col)
+    else:
+       star=''
+    print('The correlation of {:} with the outcome variable is {:7.6f}{:}'.format(col, corr, star))
+  except:
+    continue;
+
+#sns.set(rc={'figure.figsize':(20,20)})
+#sns.heatmap(df_train[correlated_cols].corr(), cmap='RdBu_r', annot=True, center=0.0)
+
+# COMMAND ----------
+
+sns.set(rc={'figure.figsize':(15,15)})
+sns.heatmap(train_data[correlated_cols].corr(), cmap='RdBu_r', annot=True, center=0.0)
+
+# COMMAND ----------
+
+# MAGIC %md Correlated columns that were removed
+# MAGIC    
+# MAGIC     'ORIGIN_WIND_GUST_OBSERVATION_SPEED_RATE' correlates with ORIGIN_WND_SPEED_RATE
+# MAGIC     'DEST_WIND_GUST_OBSERVATION_SPEED_RATE' correlates with DEST_WND_SPEED_RATE
+# MAGIC     'ORIGIN_AA3_LIQUID_PRECIPITATION_DEPTH_DIMENSION' correlates with ORIGIN_RUNWAY_VISUAL_RANGE_OBSERVATION_DIRECTION_ANGLE and DEST_GD4_SKY_COVER_SUMMATION_STATE_HEIGHT_DIMENSION 
+# MAGIC     'DEST_SNOW_DEPTH_EQUIVALENT_WATER_DEPTH_DIMENSION' correlates with DEST_SNOW_DEPTH_DIMENSION
+# MAGIC     'ORIGIN_SNOW_DEPTH_EQUIVALENT_WATER_DEPTH_DIMENSION' correlates with ORIGIN_SNOW_DEPTH_DIMENSION
+# MAGIC     'ORIGIN_GA1_SKY_COVER_LAYER_BASE_HEIGHT_DIMENSION' and 'ORIGIN_GD1_SKY_COVER_SUMMATION_STATE_HEIGHT_DIMENSION' correlates with ORIGIN_SKY_CONDITION_OBSERVATION_LOWEST_CLOUD_BASE_HEIGHT_DIMENSION
+# MAGIC     'DEST_GA1_SKY_COVER_LAYER_BASE_HEIGHT_DIMENSION' correlates with DEST_SKY_CONDITION_OBSERVATION_LOWEST_CLOUD_BASE_HEIGHT_DIMENSION
+# MAGIC     'ORIGIN_GD2_SKY_COVER_SUMMATION_STATE_HEIGHT_DIMENSION' correlates with ORIGIN_GA2_SKY_COVER_LAYER_BASE_HEIGHT_DIMENSION
+# MAGIC     'DEST_GD2_SKY_COVER_SUMMATION_STATE_HEIGHT_DIMENSION' correlates with DEST_GA2_SKY_COVER_LAYER_BASE_HEIGHT_DIMENSION
+# MAGIC     'DEST_GA3_SKY_COVER_LAYER_BASE_HEIGHT_DIMENSION' correlates with DEST_GD3_SKY_COVER_SUMMATION_STATE_HEIGHT_DIMENSION
+# MAGIC     'DEST_GD1_SKY_COVER_SUMMATION_STATE_HEIGHT_DIMENSION' correlates with DEST_SKY_CONDITION_OBSERVATION_LOWEST_CLOUD_BASE_HEIGHT_DIMENSION
+
+# COMMAND ----------
+
+cols_to_keep = ['ORIGIN_WND_SPEED_RATE', 'ORIGIN_AA2_LIQUID_PRECIPITATION_PERIOD_QUANTITY', 'ORIGIN_SNOW_DEPTH_DIMENSION',
+ 'ORIGIN_AL1_SNOW_ACCUMULATION_DEPTH_DIMENSION', 'ORIGIN_RUNWAY_VISUAL_RANGE_OBSERVATION_DIRECTION_ANGLE',
+ 'ORIGIN_RUNWAY_VISUAL_RANGE_OBSERVATION_VISIBILITY_DIMENSION', 'ORIGIN_GA2_SKY_COVER_LAYER_BASE_HEIGHT_DIMENSION',
+ 'ORIGIN_SKY_CONDITION_OBSERVATION_LOWEST_CLOUD_BASE_HEIGHT_DIMENSION',
+ 'DEST_WND_SPEED_RATE', 'DEST_AA2_LIQUID_PRECIPITATION_PERIOD_QUANTITY', 'DEST_AA3_LIQUID_PRECIPITATION_DEPTH_DIMENSION',
+ 'DEST_SNOW_DEPTH_DIMENSION', 'DEST_AL1_SNOW_ACCUMULATION_DEPTH_DIMENSION',
+ 'DEST_GA2_SKY_COVER_LAYER_BASE_HEIGHT_DIMENSION',  'DEST_GD4_SKY_COVER_SUMMATION_STATE_HEIGHT_DIMENSION',
+ 'DEST_SKY_CONDITION_OBSERVATION_LOWEST_CLOUD_BASE_HEIGHT_DIMENSION']
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC With the values above we have a few hand-picked selections we can use for an initial model
+
+# COMMAND ----------
+
+flights_sample_panda_df = spark.sql("SELECT * FROM flights_and_weather_train_ra_processed").drop('YEAR').sample(True,0.001)
+
+# COMMAND ----------
+
+df = flights_sample_panda_df.toPandas()
+
+# COMMAND ----------
+
+train_label = df['DEP_DEL15'].astype(int)
+train_data = df.drop(columns='DEP_DEL15')
+
+# COMMAND ----------
+
+ #find columns that correlate with the label
+correlated_cols=[]
+for col in train_data.columns:
+  try:
+    corr = train_label.corr(train_data[col])
+    if(corr > 0.045  or corr < -0.045):
+      star='(*)' # flag the highly correlated numeric variables
+      correlated_cols.append(col)
+    else:
+       star=''
+    print('The correlation of {:} with the outcome variable is {:7.6f}{:}'.format(col, corr, star))
+  except:
+    continue;
+
+
+
+# COMMAND ----------
+
+cols_to_keep = ['ORIGIN_WND_SPEED_RATE', 'ORIGIN_WIND_GUST_OBSERVATION_SPEED_RATE', 'DEST_WND_SPEED_RATE', 'ORIGIN_WND_DIRECTION_ANGLE_3_RA', 'ORIGIN_WND_SPEED_RATE_3_RA',
+ 'ORIGIN_CIG_CEILING_HEIGHT_DIMENSION_3_RA', 'ORIGIN_RUNWAY_VISUAL_RANGE_OBSERVATION_VISIBILITY_DIMENSION_3_RA', 'ORIGIN_GD4_SKY_COVER_SUMMATION_STATE_HEIGHT_DIMENSION_3_RA',
+ 'ORIGIN_WIND_GUST_OBSERVATION_SPEED_RATE_3_RA', 'DEST_WND_SPEED_RATE_3_RA', 'DEST_AA1_LIQUID_PRECIPITATION_PERIOD_QUANTITY_3_RA', 'DEST_RUNWAY_VISUAL_RANGE_OBSERVATION_VISIBILITY_DIMENSION_3_RA',
+ 'DEST_GA3_SKY_COVER_LAYER_BASE_HEIGHT_DIMENSION_3_RA', 'DEST_GD1_SKY_COVER_SUMMATION_STATE_HEIGHT_DIMENSION_3_RA', 'DEST_WIND_GUST_OBSERVATION_SPEED_RATE_3_RA']
+
+# COMMAND ----------
+
+sns.set(rc={'figure.figsize':(20,20)})
+sns.heatmap(train_data[correlated_cols].corr(), cmap='RdBu_r', annot=True, center=0.0)
 
 # COMMAND ----------
 
