@@ -14,11 +14,6 @@
 # MAGIC ### 3. Data Lake Prep
 # MAGIC ### 4. Exploratory Data Analysis
 # MAGIC ### 5. Data Wrangling, Cleanup and Prep
-# MAGIC ### 6. Model Exploration (Pipeline)
-# MAGIC ####  a. Feature Selection
-# MAGIC ####  b. Feature Engineering
-# MAGIC ####  c. Transformations (Encoding & Scaling)
-# MAGIC ####  d. Evaluation
 
 # COMMAND ----------
 
