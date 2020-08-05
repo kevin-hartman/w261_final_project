@@ -105,7 +105,7 @@ sqlContext = SQLContext(sc)
 
 # COMMAND ----------
 
-username = "kevin"
+username = "kevin2"
 dbutils.widgets.text("username", username)
 spark.sql(f"CREATE DATABASE IF NOT EXISTS airline_delays_{username}")
 spark.sql(f"USE airline_delays_{username}")
@@ -4268,64 +4268,8 @@ spark.sql('SELECT * FROM flights_and_weather_ra_origin LIMIT 1').columns
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### PageRank Feature!
-
-# COMMAND ----------
-
-#PageRank
-flights_and_weather_train_processed = spark.sql("SELECT * from flights_and_weather_train_processed")
-airlineGraph = {'nodes': flights_and_weather_train_processed.select('ORIGIN', 'DEST').rdd.flatMap(list).distinct().collect(), 
-                'edges': flights_and_weather_train_processed.select('ORIGIN', 'DEST').rdd.map(tuple).collect()}
-
-directedGraph = nx.DiGraph()
-directedGraph.add_nodes_from(airlineGraph['nodes'])
-directedGraph.add_edges_from(airlineGraph['edges'])
-
-pageRank = nx.pagerank(directedGraph, alpha = 0.85)
-pandasPageRank = pd.DataFrame(pageRank.items(), columns = ['Station', 'PageRank'])
-pandasPageRank = spark.createDataFrame(pandasPageRank)
-
-# COMMAND ----------
-
-pagerank_origin = pandasPageRank.withColumnRenamed('Station','ORIGIN_IATA').withColumnRenamed('PageRank','ORIGIN_PAGERANK')
-pagerank_dest= pandasPageRank.withColumnRenamed('Station','DEST_IATA').withColumnRenamed('PageRank','DEST_PAGERANK')
-
-# COMMAND ----------
-
-pagerank_loc = f"/airline_delays/{username}/DLRS/pagerank/"
-
-dbutils.fs.rm(pagerank_loc + 'origin', recurse=True)
-dbutils.fs.rm(pagerank_loc + 'dest', recurse=True)
-
-# COMMAND ----------
-
-pagerank_origin.write.option('mergeSchema', True).mode('overwrite').format('delta').save(pagerank_loc + 'origin')
-pagerank_dest.write.option('mergeSchema', True).mode('overwrite').format('delta').save(pagerank_loc + 'dest')
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC 
-# MAGIC DROP TABLE IF EXISTS pagerank_origin;
-# MAGIC 
-# MAGIC CREATE TABLE pagerank_origin
-# MAGIC USING DELTA
-# MAGIC LOCATION "/airline_delays/$username/DLRS/pagerank/origin"
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC 
-# MAGIC DROP TABLE IF EXISTS pagerank_dest;
-# MAGIC 
-# MAGIC CREATE TABLE pagerank_dest
-# MAGIC USING DELTA
-# MAGIC LOCATION "/airline_delays/$username/DLRS/pagerank/dest"
-
-# COMMAND ----------
-
-# MAGIC %md
 # MAGIC ### Split Data into Train/Test/Validation
+# MAGIC TODO: Move to other notebook if we want to keep the train/validation/test feature engineering together
 
 # COMMAND ----------
 
@@ -4460,3 +4404,6 @@ validation_data.write.option('mergeSchema', True).mode('overwrite').format('delt
 
 # MAGIC %md Abdulwahab. Aljubairy, A., L. Atzori, A., L. Belcastro, F., Y. Chen, J., NR. Chopde, M., D. Georgakopoulos, P., . . . W. Wu, C. (1970, January 01). A system for effectively predicting flight delays based on IoT data. Retrieved July 25, 2020, from https://link.springer.com/article/10.1007/s00607-020-00794-w  
 # MAGIC Ye, B., Liu, B., Tian, Y., &amp; Wan, L. (2020, April 1). A Methodology for Predicting Aggregate Flight Departure ... Retrieved July 25, 2020, from https://www.mdpi.com/2071-1050/12/7/2749/pdf
+
+# COMMAND ----------
+
