@@ -49,7 +49,7 @@ from delta.tables import DeltaTable
 
 # Model Imports
 from pyspark.ml import Pipeline
-from pyspark.ml.feature import StringIndexer, VectorAssembler, StandardScaler, OneHotEncoder 
+from pyspark.ml.feature import StringIndexer, VectorAssembler, StandardScaler, OneHotEncoder, PCA
 from pyspark.ml.classification import LogisticRegression
 from pyspark.ml.classification import RandomForestClassifier
 from pyspark.ml.classification import GBTClassifier
@@ -63,7 +63,7 @@ sqlContext = SQLContext(sc)
 
 # COMMAND ----------
 
-username = "kevin2"
+username = "kevin"
 dbutils.widgets.text("username", username)
 spark.sql(f"CREATE DATABASE IF NOT EXISTS airline_delays_{username}")
 spark.sql(f"USE airline_delays_{username}")
@@ -738,6 +738,30 @@ display(validation_metrics)
 
 # COMMAND ----------
 
+
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
 # MAGIC %md # Gradient-Boosted Trees with PR
 
 # COMMAND ----------
@@ -758,7 +782,7 @@ display(train_metrics)
 # COMMAND ----------
 
 #transformed_validation_data = encoding_pipeline.transform(validation_data)['features', 'label']
-validation_preds = model.transform(transformed_validation_data)
+validation_preds = gbt_model.transform(transformed_validation_data)
 validation_metrics = evaluation_metrics(validation_preds, "Gradient-Boosted Trees on validation data")
 display(validation_metrics)
 
@@ -846,3 +870,163 @@ display(train_metrics)
 validation_preds = model.transform(transformed_validation_data)
 validation_metrics = evaluation_metrics(validation_preds, "Random Forest on validation data")
 display(validation_metrics)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC # Running Models on Rolling Average Data
+
+# COMMAND ----------
+
+train_data = spark.sql('SELECT * FROM flights_and_weather_train_ra_processed')
+validation_data = spark.sql('SELECT * FROM flights_and_weather_validation_ra_processed')
+test_data = spark.sql('SELECT * FROM flights_and_weather_test_ra_processed')
+
+# COMMAND ----------
+
+train_data = replace_empty_strings(train_data)
+validation_data = replace_empty_strings(validation_data)
+test_data = replace_empty_strings(test_data)
+
+# COMMAND ----------
+
+flights_and_weather_train_loc = f"/airline_delays/{username}/DLRS/flights_and_weather_ra_train/"
+flights_and_weather_validation_loc = f"/airline_delays/{username}/DLRS/flights_and_weather_ra_validation/"
+flights_and_weather_test_loc = f"/airline_delays/{username}/DLRS/flights_and_weather_ra_test/"
+
+# COMMAND ----------
+
+train_data.write.option('mergeSchema', True).mode('overwrite').format('delta').save(flights_and_weather_train_loc + 'processed')
+validation_data.write.option('mergeSchema', True).mode('overwrite').format('delta').save(flights_and_weather_validation_loc + 'processed')
+test_data.write.option('mergeSchema', True).mode('overwrite').format('delta').save(flights_and_weather_test_loc + 'processed')
+
+# COMMAND ----------
+
+cols_to_drop = ['DEP_DELAY', 'DEP_DELAY_NEW', 'DEP_DELAY_GROUP', 'TAIL_NUM', 'ORIGIN_CITY_NAME', 'DEST_CITY_NAME', 'FL_DATE', 'ORIGIN_WEATHER_KEY', 'DEST_WEATHER_KEY', 'ORIGIN_AL2_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'ORIGIN_AL3_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'ORIGIN_AL3_SNOW_ACCUMULATION_DEPTH_DIMENSION', 'ORIGIN_GA6_SKY_COVER_LAYER_BASE_HEIGHT_DIMENSION', 'ORIGIN_GD5_SKY_COVER_SUMMATION_STATE_HEIGHT_DIMENSION', 'ORIGIN_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_UPPER_RANGE_ATTRIBUTE', 'ORIGIN_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_LOWER_RANGE_ATTRIBUTE', 'ORIGIN_GG1_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'ORIGIN_GG2_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'ORIGIN_GG3_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'ORIGIN_GG4_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_AL2_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'DEST_AL3_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'DEST_AL3_SNOW_ACCUMULATION_DEPTH_DIMENSION', 'DEST_GA6_SKY_COVER_LAYER_BASE_HEIGHT_DIMENSION', 'DEST_GD5_SKY_COVER_SUMMATION_STATE_HEIGHT_DIMENSION', 'DEST_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_UPPER_RANGE_ATTRIBUTE', 'DEST_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_LOWER_RANGE_ATTRIBUTE', 'DEST_GG1_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_GG2_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_GG3_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_GG4_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION']
+
+train_data = train_data.drop(*cols_to_drop)
+validation_data = validation_data.drop(*cols_to_drop)
+test_data = test_data.drop(*cols_to_drop)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Logisitic Regression
+
+# COMMAND ----------
+
+# create an encoding pipeline based on information from our training data
+encoding_pipeline = Pipeline(stages = create_encoding_stages(train_data,'DEP_DEL15'))
+encoding_pipeline = encoding_pipeline.fit(train_data)
+# apply the transformations to our train data
+transformed_train_data = encoding_pipeline.transform(train_data)['features', 'label']
+
+# COMMAND ----------
+
+# train a model on our transformed train data
+startTime = time.time()
+lr = LogisticRegression(featuresCol = 'features', labelCol = 'label', maxIter = 30, regParam = 0.001, elasticNetParam = 0.25, standardization = False)
+model = lr.fit(transformed_train_data)
+train_preds = model.transform(transformed_train_data)
+endTime = time.time()
+print(f"The training time of the Logistic Regression model is: {(endTime - startTime) / (60)} minutes")       
+
+# COMMAND ----------
+
+train_metrics = evaluation_metrics(train_preds, "Logistic Regression on training data")
+display(train_metrics)
+
+# COMMAND ----------
+
+AUC(model, train_preds)
+
+# COMMAND ----------
+
+ROC(model, train_preds)
+
+# COMMAND ----------
+
+# apply the encoding transformations from our pipeline to the validation data
+transformed_validation_data = encoding_pipeline.transform(validation_data)['features', 'label']
+
+# run the fitted model on the transformed validation data
+validation_preds = model.transform(transformed_validation_data)
+
+# display our evaluation metrics
+validation_metrics = evaluation_metrics(validation_preds, "Logistic Regression on validation data")
+display(validation_metrics)
+
+# COMMAND ----------
+
+AUC(model, validation_preds)
+
+# COMMAND ----------
+
+ROC(model, validation_preds)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Gradient Boosted Trees
+
+# COMMAND ----------
+
+startTime = time.time()
+gbt = GBTClassifier(labelCol = "label", featuresCol = "features", maxIter = 10)
+gbt_model = gbt.fit(transformed_train_data)
+gbt_train_preds = gbt_model.transform(transformed_train_data)
+endTime = time.time()
+print(f"The training time of the Gradient-Boosted Tree model is: {(endTime - startTime) / (60)} minutes")
+gbt_train_metrics = evaluation_metrics(gbt_train_preds, "Gradient-Boosted Trees on training data")
+display(gbt_train_metrics)
+
+# COMMAND ----------
+
+gbt_validation_preds = gbt_model.transform(transformed_validation_data)
+gbt_validation_metrics = evaluation_metrics(gbt_validation_preds, "Gradient-Boosted Trees on validation data")
+display(gbt_validation_metrics)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Apply PCA to data with RAs
+
+# COMMAND ----------
+
+pca = PCA(k=100, inputCol="features", outputCol="pca_features")
+pca_model = pca.fit(transformed_train_data)
+pca_transformed_train_data = pca_model.transform(transformed_train_data)
+
+# COMMAND ----------
+
+# train a model on our transformed train data
+startTime = time.time()
+lr_pca = LogisticRegression(featuresCol = 'pca_features', labelCol = 'label', maxIter = 30, regParam = 0.001, elasticNetParam = 0.25, standardization = False)
+lr_pca_model = lr_pca.fit(pca_transformed_train_data)
+lr_pca_train_preds = model.transform(pca_transformed_train_data)
+endTime = time.time()
+print(f"The training time of the Logistic Regression model is: {(endTime - startTime) / (60)} minutes")   
+
+# COMMAND ----------
+
+lr_pca_train_metrics = evaluation_metrics(lr_pca_train_preds, "Logistic Regression on training data")
+display(lr_pca_train_metrics)
+
+# COMMAND ----------
+
+#transform validation data
+pca_transformed_test_data = pca_model.transform(transformed_validation_data)
+
+# COMMAND ----------
+
+# run the fitted model on the transformed validation data
+lr_pca_validation_preds = lr_pca_model.transform(pca_transformed_validation_data)
+
+# COMMAND ----------
+
+# display our evaluation metrics
+lr_pca_validation_metrics = evaluation_metrics(lr_pca_validation_preds, "Logistic Regression on validation data")
+display(lr_pca_validation_metrics)
+
+# COMMAND ----------
+
