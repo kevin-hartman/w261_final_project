@@ -51,7 +51,7 @@ from delta.tables import DeltaTable
 
 # Model Imports
 from pyspark.ml import Pipeline
-from pyspark.ml.feature import StringIndexer, VectorAssembler, StandardScaler, OneHotEncoder, PCA
+from pyspark.ml.feature import StringIndexer, VectorAssembler, StandardScaler, OneHotEncoder, PCA, FeatureHasher
 from pyspark.ml.classification import LogisticRegression
 from pyspark.ml.classification import RandomForestClassifier
 from pyspark.ml.classification import GBTClassifier
@@ -71,8 +71,11 @@ spark.sql(f"CREATE DATABASE IF NOT EXISTS airline_delays_{username}")
 spark.sql(f"USE airline_delays_{username}")
 
 flights_and_weather_pipeline_loc = f"/airline_delays/{username}/DLRS/flights_and_weather_pipeline/"
+flights_and_weather_train_loc = f"/airline_delays/{username}/DLRS/flights_and_weather_train/"
+flights_and_weather_validation_loc = f"/airline_delays/{username}/DLRS/flights_and_weather_validation/"
+flights_and_weather_test_loc = f"/airline_delays/{username}/DLRS/flights_and_weather_test/"
 
-spark.conf.set("spark.sql.shuffle.partitions", 8)
+spark.conf.set("spark.sql.shuffle.partitions", 80)
 
 # COMMAND ----------
 
@@ -152,7 +155,7 @@ def impute_missing_values(df, impute_dict):
   print("\nNumerical Columns with missing data:", missing_num_columns)
   
   # Fill the missing categorical values with the most frequent category 
-  for x in missing_cat_columns:                  
+  for x in missing_cat_columns:          
     mode = impute_dict[x]
     if mode:
       df = df.withColumn(x, f.when(df[x].isNull(), f.lit(mode)).otherwise(df[x]))
@@ -171,11 +174,15 @@ def impute_missing_values(df, impute_dict):
 
 # COMMAND ----------
 
+print(impute_dict)
+
+# COMMAND ----------
+
 # MAGIC %md Impute our training data
 
 # COMMAND ----------
 
-train_data = impute_missing_values(train_data, impute_dict)
+imputed_train_data = impute_missing_values(train_data, impute_dict)
 
 # COMMAND ----------
 
@@ -185,7 +192,7 @@ train_data = impute_missing_values(train_data, impute_dict)
 
 flights_and_weather_train_loc = f"/airline_delays/{username}/DLRS/flights_and_weather_train/"
 dbutils.fs.rm(flights_and_weather_train_loc + 'processed', recurse=True)
-train_data.write.option('mergeSchema', True).mode('overwrite').format('delta').save(flights_and_weather_train_loc + 'processed')
+imputed_train_data.write.option('mergeSchema', True).mode('overwrite').format('delta').save(flights_and_weather_train_loc + 'processed')
 
 # COMMAND ----------
 
@@ -203,7 +210,7 @@ train_data.write.option('mergeSchema', True).mode('overwrite').format('delta').s
 
 # COMMAND ----------
 
-validation_data = impute_missing_values(validation_data, impute_dict)
+imputed_validation_data = impute_missing_values(validation_data, impute_dict)
 
 # COMMAND ----------
 
@@ -213,7 +220,7 @@ validation_data = impute_missing_values(validation_data, impute_dict)
 
 flights_and_weather_validation_loc = f"/airline_delays/{username}/DLRS/flights_and_weather_validation/"
 dbutils.fs.rm(flights_and_weather_validation_loc + 'processed', recurse=True)
-validation_data.write.option('mergeSchema', True).mode('overwrite').format('delta').save(flights_and_weather_validation_loc + 'processed')
+imputed_validation_data.write.option('mergeSchema', True).mode('overwrite').format('delta').save(flights_and_weather_validation_loc + 'processed')
 
 # COMMAND ----------
 
@@ -231,7 +238,7 @@ validation_data.write.option('mergeSchema', True).mode('overwrite').format('delt
 
 # COMMAND ----------
 
-test_data = impute_missing_values(test_data, impute_dict)
+imputed_test_data = impute_missing_values(test_data, impute_dict)
 
 # COMMAND ----------
 
@@ -241,7 +248,7 @@ test_data = impute_missing_values(test_data, impute_dict)
 
 flights_and_weather_test_loc = f"/airline_delays/{username}/DLRS/flights_and_weather_test/"
 dbutils.fs.rm(flights_and_weather_test_loc + 'processed', recurse=True)
-test_data.write.option('mergeSchema', True).mode('overwrite').format('delta').save(flights_and_weather_test_loc + 'processed')
+imputed_test_data.write.option('mergeSchema', True).mode('overwrite').format('delta').save(flights_and_weather_test_loc + 'processed')
 
 # COMMAND ----------
 
@@ -252,6 +259,12 @@ test_data.write.option('mergeSchema', True).mode('overwrite').format('delta').sa
 # MAGIC CREATE TABLE flights_and_weather_test_processed
 # MAGIC USING DELTA
 # MAGIC LOCATION "/airline_delays/$username/DLRS/flights_and_weather_test/processed"
+
+# COMMAND ----------
+
+imputed_train_data = spark.sql("select * from flights_and_weather_train_processed VERSION as of 0")
+imputed_validation_data = spark.sql("select * from flights_and_weather_validation_processed VERSION as of 0")
+imputed_test_data = spark.sql("select * from flights_and_weather_test_processed VERSION as of 0")
 
 # COMMAND ----------
 
@@ -270,15 +283,15 @@ def replace_empty_strings(df):
 
 # COMMAND ----------
 
-train_data = replace_empty_strings(train_data)
-validation_data = replace_empty_strings(validation_data)
-test_data = replace_empty_strings(test_data)
+cleaned_train_data = replace_empty_strings(imputed_train_data)
+cleaned_validation_data = replace_empty_strings(imputed_validation_data)
+cleaned_test_data = replace_empty_strings(imputed_test_data)
 
 # COMMAND ----------
 
-train_data.write.option('mergeSchema', True).mode('overwrite').format('delta').save(flights_and_weather_train_loc + 'processed')
-validation_data.write.option('mergeSchema', True).mode('overwrite').format('delta').save(flights_and_weather_validation_loc + 'processed')
-test_data.write.option('mergeSchema', True).mode('overwrite').format('delta').save(flights_and_weather_test_loc + 'processed')
+cleaned_train_data.write.option('mergeSchema', True).mode('overwrite').format('delta').save(flights_and_weather_train_loc + 'processed')
+cleaned_validation_data.write.option('mergeSchema', True).mode('overwrite').format('delta').save(flights_and_weather_validation_loc + 'processed')
+cleaned_test_data.write.option('mergeSchema', True).mode('overwrite').format('delta').save(flights_and_weather_test_loc + 'processed')
 
 # COMMAND ----------
 
@@ -337,7 +350,27 @@ test_data.write.option('mergeSchema', True).mode('overwrite').format('delta').sa
 
 # COMMAND ----------
 
-print(flights_and_weather_train_loc + 'processed')
+# MAGIC %sql
+# MAGIC DESCRIBE HISTORY flights_and_weather_train_processed
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC DESCRIBE HISTORY flights_and_weather_validation_processed
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC DESCRIBE HISTORY flights_and_weather_test_processed
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC select * from flights_and_weather_train_processed VERSION as of 3
 
 # COMMAND ----------
 
@@ -353,7 +386,7 @@ train_data = spark.sql("select * from flights_and_weather_train_processed")
 validation_data = spark.sql("select * from flights_and_weather_validation_processed")
 test_data = spark.sql("select * from flights_and_weather_test_processed")
 
-cols_to_drop = ['DEP_DELAY', 'DEP_DELAY_NEW', 'DEP_DELAY_GROUP', 'TAIL_NUM', 'ORIGIN_CITY_NAME', 'DEST_CITY_NAME', 'FL_DATE', 'ORIGIN_WEATHER_KEY', 'DEST_WEATHER_KEY', 'ORIGIN_AL2_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'ORIGIN_AL3_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'ORIGIN_AL3_SNOW_ACCUMULATION_DEPTH_DIMENSION', 'ORIGIN_GA6_SKY_COVER_LAYER_BASE_HEIGHT_DIMENSION', 'ORIGIN_GD5_SKY_COVER_SUMMATION_STATE_HEIGHT_DIMENSION', 'ORIGIN_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_UPPER_RANGE_ATTRIBUTE', 'ORIGIN_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_LOWER_RANGE_ATTRIBUTE', 'ORIGIN_GG1_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'ORIGIN_GG2_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'ORIGIN_GG3_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'ORIGIN_GG4_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_AL2_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'DEST_AL3_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'DEST_AL3_SNOW_ACCUMULATION_DEPTH_DIMENSION', 'DEST_GA6_SKY_COVER_LAYER_BASE_HEIGHT_DIMENSION', 'DEST_GD5_SKY_COVER_SUMMATION_STATE_HEIGHT_DIMENSION', 'DEST_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_UPPER_RANGE_ATTRIBUTE', 'DEST_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_LOWER_RANGE_ATTRIBUTE', 'DEST_GG1_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_GG2_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_GG3_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_GG4_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION']
+cols_to_drop = ['ORIGIN', 'DEST', 'ORIGIN_IATA', 'DEST_IATA', 'DEP_DELAY', 'DEP_DELAY', 'DEP_DELAY_NEW', 'DEP_DELAY_GROUP', 'TAIL_NUM', 'ORIGIN_CITY_NAME', 'DEST_CITY_NAME', 'FL_DATE', 'ORIGIN_WEATHER_KEY', 'DEST_WEATHER_KEY', 'ORIGIN_AL2_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'ORIGIN_AL3_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'ORIGIN_AL3_SNOW_ACCUMULATION_DEPTH_DIMENSION', 'ORIGIN_GA6_SKY_COVER_LAYER_BASE_HEIGHT_DIMENSION', 'ORIGIN_GD5_SKY_COVER_SUMMATION_STATE_HEIGHT_DIMENSION', 'ORIGIN_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_UPPER_RANGE_ATTRIBUTE', 'ORIGIN_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_LOWER_RANGE_ATTRIBUTE', 'ORIGIN_GG1_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'ORIGIN_GG2_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'ORIGIN_GG3_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'ORIGIN_GG4_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_AL2_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'DEST_AL3_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'DEST_AL3_SNOW_ACCUMULATION_DEPTH_DIMENSION', 'DEST_GA6_SKY_COVER_LAYER_BASE_HEIGHT_DIMENSION', 'DEST_GD5_SKY_COVER_SUMMATION_STATE_HEIGHT_DIMENSION', 'DEST_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_UPPER_RANGE_ATTRIBUTE', 'DEST_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_LOWER_RANGE_ATTRIBUTE', 'DEST_GG1_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_GG2_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_GG3_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_GG4_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION']
 
 train_data = train_data.drop(*cols_to_drop)
 validation_data = validation_data.drop(*cols_to_drop)
@@ -380,6 +413,61 @@ def create_encoding_stages(data, label_name):
   cat_cols = [item[0] for item in data.dtypes if item[1].startswith('string')]
   numeric_cols = [item[0] for item in data.dtypes if item[1].startswith('int') | item[1].startswith('double')]
   cat_cols.remove(label_name)
+  hash_cols = ['ORIGIN_AW1_PRESENT_WEATHER_OBSERVATION_AUTOMATED_OCCURRENCE_IDENTIFIER', 'ORIGIN_AW2_PRESENT_WEATHER_OBSERVATION_AUTOMATED_OCCURRENCE_IDENTIFIER', \
+               'ORIGIN_AW3_PRESENT_WEATHER_OBSERVATION_AUTOMATED_OCCURRENCE_IDENTIFIER', 'ORIGIN_AW4_PRESENT_WEATHER_OBSERVATION_AUTOMATED_OCCURRENCE_IDENTIFIER',  \
+               'DEST_AW1_PRESENT_WEATHER_OBSERVATION_AUTOMATED_OCCURRENCE_IDENTIFIER', 'DEST_AW2_PRESENT_WEATHER_OBSERVATION_AUTOMATED_OCCURRENCE_IDENTIFIER', \
+               'DEST_AW3_PRESENT_WEATHER_OBSERVATION_AUTOMATED_OCCURRENCE_IDENTIFIER', 'DEST_AW4_PRESENT_WEATHER_OBSERVATION_AUTOMATED_OCCURRENCE_IDENTIFIER']
+  for c in hash_cols:
+     cat_cols.remove(c)
+  
+  # Encode certain categorical columns with FeatureHasher
+  hash_pipeline = Pipeline(stages=[
+    FeatureHasher(inputCols=hash_cols, outputCol="hash_features")
+  ])  
+  
+  # One-Hot Encode Categorical Columns in the vector
+  cat_pipeline = Pipeline(stages=[
+    StringIndexer(inputCols=cat_cols, outputCols=[c + '_idx' for c in cat_cols] , handleInvalid = 'keep') ,
+    OneHotEncoder(inputCols= [c + '_idx' for c in cat_cols], outputCols = [c + '_enc' for c in cat_cols]),
+    VectorAssembler(inputCols=[c + '_enc' for c in cat_cols], outputCol="cat_features")
+   ])  
+  
+  # Deal with Numeric Features
+  num_pipeline = Pipeline(stages=[
+    VectorAssembler(inputCols = numeric_cols, outputCol = 'unscaled_features', handleInvalid = 'keep'),
+    StandardScaler(inputCol = 'unscaled_features', outputCol = 'scaled_features', withStd = True, withMean = True)
+  ])
+   
+  feature_assembler = Pipeline(stages=[
+    hash_pipeline,
+    cat_pipeline,
+    num_pipeline,
+    VectorAssembler(inputCols = ["hash_features", "cat_features", "scaled_features"], outputCol = 'features', handleInvalid = 'keep')
+  ])
+
+  label_string_indexer = StringIndexer(inputCol = label_name, outputCol = 'label')
+
+  stages = [feature_assembler] + [label_string_indexer]
+  
+  return stages
+  
+
+# COMMAND ----------
+
+# Use the OneHotEncoderEstimator to convert categorical features into one-hot vectors
+# Use VectorAssembler to combine vector of one-hots and the numerical features
+# Append the process into the stages array to reproduce
+
+def create_encoding_stages(data, label_name):
+  
+  cat_cols = [item[0] for item in data.dtypes if item[1].startswith('string')]
+  numeric_cols = [item[0] for item in data.dtypes if item[1].startswith('int') | item[1].startswith('double')]
+  cat_cols.remove(label_name)
+  
+  # Encode certain categorical columns with FeatureHasher
+  #cat_pipeline = Pipeline(stages=[
+  #  FeatureHasher(inputCols=cat_cols, outputCol="cat_features")
+  # ])  
   
   # One-Hot Encode Categorical Columns in the vector
   cat_pipeline = Pipeline(stages=[
@@ -715,7 +803,7 @@ test_data.write.option('mergeSchema', True).mode('overwrite').format('delta').sa
 
 # COMMAND ----------
 
-cols_to_drop = ['DEP_DELAY', 'DEP_DELAY_NEW', 'DEP_DELAY_GROUP', 'TAIL_NUM', 'ORIGIN_CITY_NAME', 'DEST_CITY_NAME', 'FL_DATE', 'ORIGIN_WEATHER_KEY', 'DEST_WEATHER_KEY', 'ORIGIN_AL2_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'ORIGIN_AL3_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'ORIGIN_AL3_SNOW_ACCUMULATION_DEPTH_DIMENSION', 'ORIGIN_GA6_SKY_COVER_LAYER_BASE_HEIGHT_DIMENSION', 'ORIGIN_GD5_SKY_COVER_SUMMATION_STATE_HEIGHT_DIMENSION', 'ORIGIN_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_UPPER_RANGE_ATTRIBUTE', 'ORIGIN_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_LOWER_RANGE_ATTRIBUTE', 'ORIGIN_GG1_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'ORIGIN_GG2_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'ORIGIN_GG3_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'ORIGIN_GG4_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_AL2_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'DEST_AL3_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'DEST_AL3_SNOW_ACCUMULATION_DEPTH_DIMENSION', 'DEST_GA6_SKY_COVER_LAYER_BASE_HEIGHT_DIMENSION', 'DEST_GD5_SKY_COVER_SUMMATION_STATE_HEIGHT_DIMENSION', 'DEST_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_UPPER_RANGE_ATTRIBUTE', 'DEST_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_LOWER_RANGE_ATTRIBUTE', 'DEST_GG1_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_GG2_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_GG3_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_GG4_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION']
+cols_to_drop = ['ORIGIN', 'DEST', 'ORIGIN_IATA', 'DEST_IATA', 'DEP_DELAY', 'DEP_DELAY_NEW', 'DEP_DELAY_GROUP', 'TAIL_NUM', 'ORIGIN_CITY_NAME', 'DEST_CITY_NAME', 'FL_DATE', 'ORIGIN_WEATHER_KEY', 'DEST_WEATHER_KEY', 'ORIGIN_AL2_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'ORIGIN_AL3_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'ORIGIN_AL3_SNOW_ACCUMULATION_DEPTH_DIMENSION', 'ORIGIN_GA6_SKY_COVER_LAYER_BASE_HEIGHT_DIMENSION', 'ORIGIN_GD5_SKY_COVER_SUMMATION_STATE_HEIGHT_DIMENSION', 'ORIGIN_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_UPPER_RANGE_ATTRIBUTE', 'ORIGIN_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_LOWER_RANGE_ATTRIBUTE', 'ORIGIN_GG1_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'ORIGIN_GG2_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'ORIGIN_GG3_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'ORIGIN_GG4_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_AL2_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'DEST_AL3_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'DEST_AL3_SNOW_ACCUMULATION_DEPTH_DIMENSION', 'DEST_GA6_SKY_COVER_LAYER_BASE_HEIGHT_DIMENSION', 'DEST_GD5_SKY_COVER_SUMMATION_STATE_HEIGHT_DIMENSION', 'DEST_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_UPPER_RANGE_ATTRIBUTE', 'DEST_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_LOWER_RANGE_ATTRIBUTE', 'DEST_GG1_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_GG2_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_GG3_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_GG4_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION']
 
 train_data = train_data.drop(*cols_to_drop)
 validation_data = validation_data.drop(*cols_to_drop)
@@ -1106,16 +1194,8 @@ display(lr_pca_validation_metrics)
 
 # COMMAND ----------
 
-
-
-# COMMAND ----------
-
 # MAGIC %md
 # MAGIC ## Logistic Regression on Rolling Average Engineered features, with highly correlated columns
-
-# COMMAND ----------
-
-
 
 # COMMAND ----------
 
@@ -1179,6 +1259,96 @@ display(lr_2_validation_metrics)
 
 # COMMAND ----------
 
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Logistic Regression with arrival delay noted 2 hours before departure
+
+# COMMAND ----------
+
+cols_to_drop = ['ORIGIN', 'DEST', 'ORIGIN_IATA', 'DEST_IATA', 'DEP_DELAY', 'DEP_DELAY', 'DEP_DELAY_NEW', 'DEP_DELAY_GROUP', 'TAIL_NUM', 'ORIGIN_CITY_NAME', 'DEST_CITY_NAME', 'FL_DATE', 'ORIGIN_WEATHER_KEY', 'DEST_WEATHER_KEY', 'ORIGIN_AL2_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'ORIGIN_AL3_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'ORIGIN_AL3_SNOW_ACCUMULATION_DEPTH_DIMENSION', 'ORIGIN_GA6_SKY_COVER_LAYER_BASE_HEIGHT_DIMENSION', 'ORIGIN_GD5_SKY_COVER_SUMMATION_STATE_HEIGHT_DIMENSION', 'ORIGIN_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_UPPER_RANGE_ATTRIBUTE', 'ORIGIN_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_LOWER_RANGE_ATTRIBUTE', 'ORIGIN_GG1_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'ORIGIN_GG2_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'ORIGIN_GG3_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'ORIGIN_GG4_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_AL2_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'DEST_AL3_SNOW_ACCUMULATION_PERIOD_QUANTITY', 'DEST_AL3_SNOW_ACCUMULATION_DEPTH_DIMENSION', 'DEST_GA6_SKY_COVER_LAYER_BASE_HEIGHT_DIMENSION', 'DEST_GD5_SKY_COVER_SUMMATION_STATE_HEIGHT_DIMENSION', 'DEST_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_UPPER_RANGE_ATTRIBUTE', 'DEST_SKY_CONDITION_OBSERVATION_BASE_HEIGHT_LOWER_RANGE_ATTRIBUTE', 'DEST_GG1_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_GG2_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_GG3_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION', 'DEST_GG4_BELOW_STATION_CLOUD_LAYER_TOP_HEIGHT_DIMENSION']
+
+# COMMAND ----------
+
+join_statement = " JOIN linked_arr_delays lad ON lad.ORIGIN_WEATHER_KEY = f.ORIGIN_WEATHER_KEY AND lad.TAIL_NUM = f.TAIL_NUM"
+
+train_data_arr = spark.sql("SELECT * FROM flights_and_weather_train_processed version as of 3 f" + join_statement).drop(*cols_to_drop).drop(*['ORIGIN_WEATHER_KEY', 'TAIL_NUM'])
+validation_data_arr = spark.sql("SELECT * FROM flights_and_weather_validation_processed version as of 2 f" + join_statement).drop(*cols_to_drop).drop(*['ORIGIN_WEATHER_KEY', 'TAIL_NUM'])
+test_data_arr = spark.sql("SELECT * FROM flights_and_weather_test_processed version as of 2 f" + join_statement).drop(*cols_to_drop).drop(*['ORIGIN_WEATHER_KEY', 'TAIL_NUM'])
+
+
+
+# COMMAND ----------
+
+join_statement = " JOIN linked_arr_delays lad ON lad.ORIGIN_WEATHER_KEY = f.ORIGIN_WEATHER_KEY AND lad.TAIL_NUM = f.TAIL_NUM"
+
+train_data_arr = spark.sql("SELECT * FROM flights_and_weather_train_ra_processed f" + join_statement).drop(*cols_to_drop).drop(*['ORIGIN_WEATHER_KEY', 'TAIL_NUM'])
+validation_data_arr = spark.sql("SELECT * FROM flights_and_weather_validation_ra_processed f" + join_statement).drop(*cols_to_drop).drop(*['ORIGIN_WEATHER_KEY', 'TAIL_NUM'])
+test_data_arr = spark.sql("SELECT * FROM flights_and_weather_test_ra_processed f" + join_statement).drop(*cols_to_drop).drop(*['ORIGIN_WEATHER_KEY', 'TAIL_NUM'])
+
+
+# COMMAND ----------
+
+dataset_size=float(train_data_arr.select("DEP_DEL15").count())
+numPositives=train_data_arr.select("DEP_DEL15").where('DEP_DEL15 == "1"').count()
+per_ones=(float(numPositives)/float(dataset_size))*100
+numNegatives=float(dataset_size-numPositives)
+print('The number of ones are {}'.format(numPositives))
+print('Percentage of ones are {}'.format(per_ones))
+
+BalancingRatio= numNegatives/dataset_size
+print('BalancingRatio = {}'.format(BalancingRatio))
+
+# COMMAND ----------
+
+
+# create an encoding pipeline based on information from our training data
+encoding_pipeline = Pipeline(stages = create_encoding_stages(train_data_arr,'DEP_DEL15')).fit(train_data_arr)
+
+# apply the transformations to our train data
+transformed_train_data = encoding_pipeline.transform(train_data_arr)['features', 'label']
+
+# COMMAND ----------
+
+BalancingRatio = 0.82
+transformed_train_data_with_weights = transformed_train_data.withColumn("classWeights", f.when(transformed_train_data.label == "1",BalancingRatio).otherwise(1-BalancingRatio))
+
+# COMMAND ----------
+
+# Using results from our parameter search
+startTime = time.time()
+lr = LogisticRegression(featuresCol = 'features', labelCol = 'label', maxIter = 30, regParam = 0.01, elasticNetParam = 0.75, standardization = False, weightCol="classWeights")
+model = lr.fit(transformed_train_data_with_weights)
+train_preds = model.transform(transformed_train_data)
+endTime = time.time()
+print(f"The training time of the Logistic Regression model is: {(endTime - startTime) / (60)} minutes")
+
+
+# COMMAND ----------
+
+train_metrics = evaluation_metrics(train_preds, "Logistic Regression on training data")
+display(train_metrics)
+
+# COMMAND ----------
+
+AUC(model, train_preds)
+ROC(model, train_preds)
+
+# COMMAND ----------
+
+# apply the encoding transformations from our pipeline to the validation data
+#transformed_validation_data = encoding_pipeline.transform(validation_data_arr)['features', 'label']
+
+# run the fitted model on the transformed validation data
+validation_preds = model.transform(transformed_validation_data)
+# display our evaluation metrics
+validation_metrics = evaluation_metrics(validation_preds, "Logistic Regression on validation data")
+display(validation_metrics)
+
+# COMMAND ----------
+
 # MAGIC %md ## Running best model on Test
 
 # COMMAND ----------
@@ -1218,18 +1388,6 @@ print(f"The training time of the Logistic Regression model is: {(endTime - start
 
 train_metrics = evaluation_metrics(train_preds, "Logistic Regression on training data")
 display(train_metrics)
-
-# COMMAND ----------
-
-# apply the encoding transformations from our pipeline to the validation data
-transformed_validation_data = encoding_pipeline.transform(validation_data)['features', 'label']
-
-# run the fitted model on the transformed validation data
-validation_preds = model.transform(transformed_validation_data)
-
-# display our evaluation metrics
-validation_metrics = evaluation_metrics(validation_preds, "Logistic Regression on validation data")
-display(validation_metrics)
 
 # COMMAND ----------
 
