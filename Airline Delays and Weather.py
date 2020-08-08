@@ -4336,6 +4336,220 @@ validation_data.write.option('mergeSchema', True).mode('overwrite').format('delt
 
 # COMMAND ----------
 
+# MAGIC %md ### Arrival Delay
+
+# COMMAND ----------
+
+flights_and_weather_pipeline = spark.sql('SELECT * FROM flights_and_weather_pipeline_processed VERSION AS OF 1 WHERE DIVERTED = 0')
+
+# COMMAND ----------
+
+def fix_arr_del15(arr_del15):
+  if arr_del15 is None:
+      return 0
+  else:
+      return arr_del15
+    
+fix_arr_del15 = udf(fix_arr_del15)
+
+# COMMAND ----------
+
+#fix ARR_DEL15
+flights_and_weather_pipeline = flights_and_weather_pipeline.withColumn('ARR_DEL15', fix_arr_del15('ARR_DEL15'))def zero_pad_flight_time(flight_time):
+    flight_time = str(flight_time)
+    if len(flight_time) == 1:
+        return f'000{flight_time}'
+    elif len(flight_time) == 2:
+        return f'00{flight_time}'
+    elif len(flight_time) == 3:
+        return f'0{flight_time}'
+    elif len(flight_time) == 4:
+        return flight_time
+  
+zero_pad_flight_time = udf(zero_pad_flight_time)
+
+def get_utc_datetime(year, month, day, time, tz):
+  tz = timezone(tz)
+  utc = timezone('UTC')
+  hour = int(time[:2])
+  if hour == 24:
+      hour = 23
+  minute = int(time[2:])
+  if hour not in [h for h in range(0,24)]:
+    print(hour)
+  local_dt = datetime(int(year), int(month), int(day), hour, minute, tzinfo=tz)
+  utc_dt = local_dt.astimezone(utc)
+  
+  return utc_dt
+
+get_utc_datetime = udf(get_utc_datetime)
+
+def get_two_hour_adjusted_datetime(current_datetime):
+  return (current_datetime - timedelta(hours=2))
+
+get_two_hour_adjusted_datetime = udf(get_two_hour_adjusted_datetime)
+
+def adjust_by_delay(current_datetime, datetime_minutes):
+  # for some strange reason, need to manually process  the datetime despite it working fine in func above
+  year = 2015
+  month = 1
+  day = 1
+  hour = 0
+  minute = 0
+  
+  if datetime_minutes is None:
+    delay = 0
+  else:
+    delay = int(datetime_minutes)
+  
+  dt_parts = current_datetime.split(',')
+  for dt_part in dt_parts:
+      try: 
+          dt_part_split = dt_part.split('=')
+      except:
+          continue
+      if dt_part_split[0] == 'YEAR' and dt_part_split[1] != '?':
+          year = int(dt_part_split[1])
+      elif dt_part_split[0] == 'MONTH' and dt_part_split[1] != '?':
+          month = int(dt_part_split[1]) + 1
+      elif dt_part_split[0] == 'DAY_OF_MONTH' and dt_part_split[1] != '?':
+          day = int(dt_part_split[1])
+      elif dt_part_split[0] == 'HOUR_OF_DAY' and dt_part_split[1] != '?':
+          hour = int(dt_part_split[1])
+      elif dt_part_split[0] == 'MINUTE' and dt_part_split[1] != '?':
+          minute = int(dt_part_split[1])
+  return (datetime(year, month, day, hour=hour, minute=minute) + timedelta(minutes = delay))
+
+adjust_by_delay = udf(adjust_by_delay)
+
+def get_datetime_string(d):
+  return d.strftime("%Y-%m-%d %H:%M")
+
+get_datetime_string = udf(get_datetime_string)
+
+# COMMAND ----------
+
+airports = spark.sql("SELECT IATA AS IATA_DEST, AIRPORT_TZ_NAME AS DEST_AIRPORT_TZ_NAME FROM airports_processed")
+
+# COMMAND ----------
+
+flights_and_weather_pipeline = flights_and_weather_pipeline.join(airports, flights_and_weather_pipeline.DEST == airports.IATA_DEST, 'left')
+
+# COMMAND ----------
+
+#flights_and_weather_pipeline.withColumn('test', to_timestamp('df.t', 'yyyy-MM-dd HH:mm:ss')
+# create a column for the scheduled departure time in UTC
+flights_and_weather_pipeline = flights_and_weather_pipeline.withColumn("UTC_SCHEDULED_DEPARTURE", get_datetime_string(get_utc_datetime("YEAR",\
+                                                                                                                                        "MONTH",\
+                                                                                                                                        "DAY_OF_MONTH",\
+                                                                                                                    zero_pad_flight_time("CRS_DEP_TIME"),\
+                                                                                                                    "AIRPORT_TZ_NAME")))
+
+# COMMAND ----------
+
+# create a column for the inference time
+flights_and_weather_pipeline = flights_and_weather_pipeline.withColumn("UTC_INFERENCE_TIME",\
+                                                                       get_datetime_string(get_two_hour_adjusted_datetime(get_utc_datetime("YEAR",\
+                                                                                                                                           "MONTH",\
+                                                                                                                                           "DAY_OF_MONTH",\
+                                                                                                                                 zero_pad_flight_time("CRS_DEP_TIME"),\
+                                                                                                                                 "AIRPORT_TZ_NAME"))))
+
+# COMMAND ----------
+
+# create a column for the actual departure time
+flights_and_weather_pipeline = flights_and_weather_pipeline.withColumn("UTC_ACTUAL_DEPARTURE_STAGE_1",zero_pad_flight_time("CRS_DEP_TIME"))
+flights_and_weather_pipeline = flights_and_weather_pipeline.withColumn("UTC_ACTUAL_DEPARTURE_STAGE_2",get_utc_datetime("YEAR",\
+                                                                                                                       "MONTH",\
+                                                                                                                       "DAY_OF_MONTH",\
+                                                                                                                       "UTC_ACTUAL_DEPARTURE_STAGE_1",\
+                                                                                                                       "AIRPORT_TZ_NAME" ))
+flights_and_weather_pipeline = flights_and_weather_pipeline.withColumn("UTC_ACTUAL_DEPARTURE_STAGE_3",\
+                                                                       adjust_by_delay(flights_and_weather_pipeline.UTC_ACTUAL_DEPARTURE_STAGE_2,\
+                                                                                       flights_and_weather_pipeline.DEP_DELAY))
+flights_and_weather_pipeline = flights_and_weather_pipeline.withColumn("UTC_ACTUAL_DEPARTURE", get_datetime_string("UTC_ACTUAL_DEPARTURE_STAGE_3"))
+
+# COMMAND ----------
+
+flights_and_weather_pipeline = flights_and_weather_pipeline.drop(*["UTC_ACTUAL_DEPARTURE_STAGE_1","UTC_ACTUAL_DEPARTURE_STAGE_2","UTC_ACTUAL_DEPARTURE_STAGE_3"])
+
+# COMMAND ----------
+
+# create a column for scheduled arrival time
+flights_and_weather_pipeline = flights_and_weather_pipeline.withColumn("UTC_SCHEDULED_ARRIVAL", get_datetime_string(get_utc_datetime("YEAR",\
+                                                                                                                                        "MONTH",\
+                                                                                                                                        "DAY_OF_MONTH",\
+                                                                                                                    zero_pad_flight_time("CRS_ARR_TIME"),\
+                                                                                                                    "AIRPORT_TZ_NAME")))
+
+# COMMAND ----------
+
+# create a column for the actual arrival time
+flights_and_weather_pipeline = flights_and_weather_pipeline.withColumn("UTC_ACTUAL_ARRIVAL_STAGE_1",zero_pad_flight_time("CRS_ARR_TIME"))
+flights_and_weather_pipeline = flights_and_weather_pipeline.withColumn("UTC_ACTUAL_ARRIVAL_STAGE_2",get_utc_datetime("YEAR",\
+                                                                                                                       "MONTH",\
+                                                                                                                       "DAY_OF_MONTH",\
+                                                                                                                       "UTC_ACTUAL_ARRIVAL_STAGE_1",\
+                                                                                                                       "DEST_AIRPORT_TZ_NAME" ))
+flights_and_weather_pipeline = flights_and_weather_pipeline.withColumn("UTC_ACTUAL_ARRIVAL_STAGE_3",\
+                                                                       adjust_by_delay(flights_and_weather_pipeline.UTC_ACTUAL_ARRIVAL_STAGE_2,\
+                                                                                       flights_and_weather_pipeline.ARR_DELAY))
+flights_and_weather_pipeline = flights_and_weather_pipeline.withColumn("UTC_ACTUAL_ARRIVAL", get_datetime_string("UTC_ACTUAL_ARRIVAL_STAGE_3"))
+
+# COMMAND ----------
+
+flights_and_weather_pipeline = flights_and_weather_pipeline.drop(*["UTC_ACTUAL_ARRIVAL_STAGE_1","UTC_ACTUAL_ARRIVAL_STAGE_2","UTC_ACTUAL_ARRIVAL_STAGE_3"])
+
+# COMMAND ----------
+
+ def prev_arrival(df):
+    '''indicates whether or not the previous flight a plane was delayed'''
+
+    # grouped window to calculate n hour moving average
+    w = Window.partitionBy('TAIL_NUM').orderBy(f.to_timestamp(f.col("UTC_ACTUAL_ARRIVAL"),'yyyy-MM-dd HH:mm'))
+    df = df.withColumn('PREV_ARR_DEL15',f.lag("ARR_DEL15",1).over(w))
+    df = df.withColumn('PREV_ARRIVAL',f.lag("UTC_ACTUAL_ARRIVAL",1).over(w))
+    
+    return df
+
+# COMMAND ----------
+
+flights_and_weather_pipeline = prev_arrival(flights_and_weather_pipeline)
+
+# COMMAND ----------
+
+#define a udf to calculate if an arrival delay impacted a current flight
+def check_cascaded_delay(prev_arrival,inference_time,prev_delayed):
+    if prev_arrival is None or inference_time is None or prev_delayed is None:
+        return 0
+    prev_arrival = datetime.strptime(prev_arrival,'%Y-%m-%d %H:%M')
+    inference_time = datetime.strptime(inference_time,'%Y-%m-%d %H:%M')
+    if prev_arrival < inference_time and prev_delayed == "1.0":
+        return 1
+    else:
+        return 0
+check_cascaded_delay = udf(check_cascaded_delay)
+
+# COMMAND ----------
+
+flights_and_weather_pipeline_with_arr = flights_and_weather_pipeline.withColumn('LATE_ARRIVAL_DELAY', check_cascaded_delay('PREV_ARRIVAL','UTC_INFERENCE_TIME','PREV_ARR_DEL15'))
+
+# COMMAND ----------
+
+flights_and_weather_pipeline_with_arr = flights_and_weather_pipeline.withColumn('LATE_ARRIVAL_DELAY', check_cascaded_delay('PREV_ARRIVAL','UTC_INFERENCE_TIME','PREV_ARR_DEL15'))
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC 
+# MAGIC DROP TABLE IF EXISTS linked_arr_delays;
+# MAGIC 
+# MAGIC CREATE TABLE linked_arr_delays
+# MAGIC USING DELTA
+# MAGIC LOCATION "/airline_delays/$username/DLRS/linked_arr_delays/processed"
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC #### We are done. Now we can examine our newly minted features and do some additional limited EDA for feature selection.
 
