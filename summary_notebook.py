@@ -11,9 +11,10 @@
 
 # MAGIC %md # Referenced Notebooks
 # MAGIC ## EDA and Feature Engineering Notebook
-# MAGIC * <Insert Link Here>  
+# MAGIC * https://dbc-50712828-d793.cloud.databricks.com/?o=4611511999589276#notebook/2431210803799670/command/1672490400676146
+# MAGIC 
 # MAGIC ## Modeling Notebook
-# MAGIC * <Insert Link Here>  
+# MAGIC * https://dbc-b08f19ef-aaab.cloud.databricks.com/?o=8795677657115827#notebook/4222972772477374/command/760349354865761
 
 # COMMAND ----------
 
@@ -32,25 +33,26 @@
 
 # COMMAND ----------
 
-# MAGIC %md ## Objective
-# MAGIC 
-# MAGIC Our goal is to understand flight delays given information about the flight, and surrounding weather information. Flight delays are common, however, then can be a result of various amount of factors. We want to identify what these features may be, and create a model that can accurately predict whether the flight will be delayed by atleast 15 minutes, or not. We attempt to use multiple models, as well as hyperparameter turning to get our final result.
+# MAGIC %md 
+# MAGIC ## Objective
+# MAGIC Our goal is to understand flight departure delays given information about the flight and weather conditions at the origin and destination. Flight delays are common, however, their exact cause is a result of many factors. We want to identify what these features may be and create a model that can accurately predict whether or not a flight will be delayed by atleast 15 minutes. We attempt to use multiple models, hyperparameter turning, and cross-validation to get our final result.
 # MAGIC 
 # MAGIC ## Testing Approach 
 # MAGIC 
-# MAGIC We decided to partition our dataset by years, where our training dataset consisted of data from 2015-2017, our validation data is from 2018, and our testing data is from 2019. The reason we split the data like this is because we don't want to to use future data to predict past data.  Furthermore, it is essential that all of the testing data is not sampled from any data that is in the future, for otherwise the model would not be practically useful.  
+# MAGIC ### Data Partitioning
+# MAGIC We partitioned our dataset by years, where our training dataset consisted of data from 2015-2017, our validation data is from 2018, and our testing data is from 2019. The reason we split the data like this is because we don't want to to use future data to predict past data.  Furthermore, it is essential that any features used are sampled from past data. Otherwise, the model will  not be practically useful.  
 # MAGIC 
-# MAGIC Note for the evaluation metric that is used, it appears that other literature on this topic have used the accuracy metric as the ideal metric to gauge model performance (Ye, 2020, Abdulwahab, 2020).  Therefore, our team has also decided to adopt accuracy as the de facto metric of comparison to determine which model is performing the best.  In addition, while it is important to minimize both the number of false positives and false negatives, our group has decided to prioritize minimizing the number of false positives, as we do not want to tell an individual that there is a delay when there actually is not a delay, as that could cause the individual to miss the flight which is the worst possible scenario.  Indeed, even if there a large number of false negatives, which implies that we tell the individual that there is a delay even though there is not a delay, then this outcome does not have as a negative impact on the user compared to them potentially missing their flight.  
+# MAGIC ### Evaluation Metrics
+# MAGIC Literature on this topic has used accuracy as the ideal metric to gauge model performance (Examples: Ye, 2020; Abdulwahab, 2020).  Following the lead of the literature, our team intitially decided to adopt accuracy as the de facto metric for comparing performance between models. However, when considering the business case of running an airport or airline, we decided that precision and the false positive rate are the most important metrics. Minimizing the number of false positives is important because we do not want to tell an individual that there is a delay when there actually is not a delay, as that could cause the individual to miss the flight. Even if there a large number of false negatives, which implies that we tell the individual that there is a delay even though there is not a delay, then this outcome does not have as big of a negative impact on the user compared to potentially missing their flight. In an effort to guide model development, we also consider additional standard metrics including, Recall, F1 Score, and the Area Under the Receiver-Operator Characteristic Curve (AUROC).   
 # MAGIC 
 # MAGIC ## Baseline Model
+# MAGIC For our baseline model we decided to use logistic regression, which predicts on the binary variable of a delay greater than 15 minutes (DEP_DEL15). This model utilized 35 features from the flights and weather data and produced an accuracy score of 0.8154 on the validation data, but it unfortunately predicted a fairly large number of false positives, 4,053. 
 # MAGIC 
-# MAGIC For our baseline model, we decided to use a logistic regression model which just predicts on the binary variable of a delay greater than 15 minutes (DEP_DEL15).  This raw model was able to produce an accuracy score of 0.8154 on the validation data, but it unfortunately predicted a fairly large number of false positives, namely 4053.  This is large with respect to other baseline model of random forest, which produced a similar accuracy score of 0.8156.  However, it produced a much smaller number of false positives, namely 426.
-# MAGIC 
-# MAGIC Overall, in order to be practically useful, our model should have an accuracy score that exceeds 0.8 with a miniscule number of false positives.  If there are a large number of false positives, then the veracity of our model is incredibly questionable.  Moreover, a distinguishing factor between the varying performances among models will be the number of predictions.  For instance, models can have high accuracy scores, but they may not generate a large number of predictions in the first place.  If the model is unable to create a prediction, then indeed the practicality of the model is quite dubious.  
+# MAGIC Overall, in order to be practically useful, our model should have an accuracy score that exceeds 0.8 while minimizing false positives.  If there are a large number of false positives, then the veracity of our model is questionable.  Moreover, a distinguishing factor for model performance will be the number of predicted delays.  For instance, models can have high accuracy scores due to the imbalance of the classes (far fewer flights are delayed than on time), but they may not predict delays in the first place.  If the model is unable to predict a delay, then the practicality of the model is dubious.  
 # MAGIC 
 # MAGIC ## Limitations
 # MAGIC 
-# MAGIC Some of the limitations of our model include our model not predicting on different severities of delay.  From a user perspective, it is more beneficial have different levels of delay based on how long their will be a delay.  By only predicting whether there is a delay or not, it is difficult for the individual to truly manage their schedule to accomodate for the flight delay.  This distinction between different magnitudes of delay will especially have prominent impacts on airports that have a lot of traffic.
+# MAGIC Some of the limitations of our model is that the model does not predict the magnitude of the delay.  From a user perspective, it is beneficial to understand the magnitude of the delay.  By only predicting whether or not there is a delay, it is difficult for the individual to manage their schedule to accomodate for the flight delay.  This distinction between different magnitudes of delay will especially have prominent impacts on airports that have a lot of traffic.
 
 # COMMAND ----------
 
@@ -58,11 +60,92 @@
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC **NOTE:** Please note that a deep dive of our EDA can be found in our EDA and Feature Engineering Notebook here: https://dbc-50712828-d793.cloud.databricks.com/?o=4611511999589276#notebook/2431210803799670/command/1672490400676146
+# MAGIC 
+# MAGIC ### EDA  
+# MAGIC At a very high level, the goals of our EDA consist of: identifying missing data in both the airlines and weather datasets, joining the weather dataset with the airlines dataset and creating haverstine distance and other functions to map weather stations with airports, and identifying correlated features for selection and engineering.  
+# MAGIC 
+# MAGIC We conducted preliminary EDA on key variables of interest, namely those most correlated with our outcome variable. We imported and modified an EDA function one of the team members had written in W207 to analyze the airline data, giving us the different categories, or the mean/median if it’s a continuous variable. We then analyzed the historical departures and arrivals or flights, as well as the amount of time that was made up/lost in the air. Next, we looked at the weather data and did a similar analysis to our airline data. 
+# MAGIC 
+# MAGIC ### Challenges
+# MAGIC One of the key challenges identified is joining the flights and weather datasets. In order to accomplish this, we created a compound key based on the closest weather station to each airport and the time of weather observations in the weather dataset. We use two different compound keys, one for each of the origin and destination airports. Adjusting the timezone for measurements and flight times is necessary in order to achieve a consistent join.
+# MAGIC 
+# MAGIC To narrow our focus to only the most important features and combat multicollinearity, we created heat maps to visualize which features were correlated heavily with each other. Moreover, we also computed correlation scores for each feature with respect to the our Departure Delay variable to create a model focused on only the most significant features. 
+# MAGIC 
+# MAGIC There are numerous missing values in both datasets. Specifics can be found in our deep dive notebook linked above.    
+# MAGIC 
+# MAGIC After completing these aforementioned tasks, one of the key challenges our group faced was with regards to imputation.  It was absolutely imperative that we converted variables to their appropriate type, and furthermore, that we imputed variables using the mean, mode, or NULL value accordingly based on the values that exist.  This was particularly challenging, for many of the fields in the weather data had unique encodings to represent NULL values that had to be decoded manually.  
+
+# COMMAND ----------
+
 # MAGIC %md # Feature Engineering
+# MAGIC 
+# MAGIC Please note that a deep dive of our Feature Engineering can be found in our EDA and Feature Engineering Notebook here: https://dbc-50712828-d793.cloud.databricks.com/?o=4611511999589276#notebook/2431210803799670/command/1672490400676146
+# MAGIC 
+# MAGIC Some of the proposed features that our group worked on include the following:
+# MAGIC * **ORIGIN_PAGERANK/DEST_PAGERANK**: This feature applies PageRank based on a graph of airports generated from the training set of the flight data, where more nodes (aka more routes) imply more weight to the airport, which implies a higher chance of delay. This feature is derived by creating an adjacency matrix that is a hash map where the key is the origin airport and the value is the destination airports and counts that reflect the number of times visited from the origin. This constructs a map of which airports were visited most frequently and which airports have the most traffic.
+# MAGIC * **LATE_ARRIVAL_DELAY**: Each flight has a TAIL_NUM indicating which plane flew a route. We can leverage paritioning and window functions to order flights first by their TAIL_NUM and then by the timestamp of the flight. Then, if we are looking at flight \\(i\\), we use a lag function to look at flight \\(i-1\\) and attach its UTC arrival time and whether or not it was delayed by 15 minutes or more on arrival. Using these two pieces of data, we then compare the arrival time to the inference time (2 hours prior to the flight) and see if we could feasibly have that knowledge when trying to predict a delay. 
+# MAGIC Two other features were discussed but ultimately not implemented:.
+# MAGIC * **IN_FLIGHT_AIR_DELAY**: quantifies the amount of time that is either made up or lost in the air. This feature is derived from the underlying data by taking the difference between arrival and departure delay. This feature was not used because it relies on future data. We cannot know how much time a flight will lose or make up in the air before the flight happens.
+# MAGIC * **SEASONAL_DELAY**: This feature will use the date of departure to identify whether the flight delay could be exacerbated due to the seasonal cycle (e.g holiday travels). This feature will be derived from the underlying data by analyzing the flight delay variables with respect to the date of travel. This feature was not used because other time variables included, such as MONTH and DAY_OF_MONTH contain the same information that this feature would.
+# MAGIC 
+# MAGIC We computed 3-hr rolling averages of all numerical weather features. Here are a few examples because there are 45 that were ultimately included in our models: 
+# MAGIC * ORIGIN/DEST_AVG_WND_SPEED: moving average of observed wind speed over over 3 hrs. 
+# MAGIC * ORIGIN/DEST_AVG_CIG_HEIGHT_DIMENSION: moving average ceiling height over 3 hrs.
+# MAGIC * ORIGIN/DEST_AVG_PRECIP_RATE: moving average precipitation over 3 hrs.
+# MAGIC * ORIGIN/DEST_AVG_VIS_OBS_DISTANCE_DIMENSION: moving average visibility distance observation over 3 hrs.
+# MAGIC * ORIGIN/DEST_AVG_SNOW_DEPTH: moving average snow depth over 3 hrs.  
+# MAGIC 
+# MAGIC In order to compute these features, we embarked on a significant research and engineering effort in order to unpack the features and determine whether a feature is categorical or numeric. The justification for creating these weather features is that when determining whether a flight should be delayed or not in advance, it may be advantageous to know the average weather conditions in addition to the point in time weather conditions. 
+# MAGIC 
+# MAGIC After engineering all of these features and including many of the other flight and weather features, our biggest model included a total of 576 features. At that scale, feature selection becomes very important. We utilized a number of techniques to reduce the number of features in our models including L1 and L2 regularization, and PCA. We also attempted to run a few models with a very small subset of features that were the most highly correlated with our outcome variable. 
 
 # COMMAND ----------
 
 # MAGIC %md # Algorithm Exploration
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Please note that a deep dive of our Algorithm Exploration can be found in our modeling notebook here: https://dbc-b08f19ef-aaab.cloud.databricks.com/?o=8795677657115827#notebook/4222972772477374/command/760349354865761
+# MAGIC 
+# MAGIC Our group applied three algorithms to our training set: Logistic Regression, Random Forest, and Gradient-Boosted Trees.  Our group expected Logistic Regression to train the fastest, Random Forest to take the longest, and Gradient-Boosted Trees to generate the best results.  From past experience with modeling in various Kaggle challenges and W207, our group had very high hopes for Gradient-Boosted Trees.  Some of the trade-offs that our group experienced was that while Random Forest initially had the highest accuracy scores, it took an incredibly long time to train, as expected.  Results wise, Random Forest yielded a miniscule number of predictions for both true and false positives.  Gradient-Boosted Trees, while it predicted a lot of delays it had a fairly low accuracy and precision score relative to the other models.  Most importantly, it generated a large number of false positives, the opposite of one of our main directives.
+# MAGIC 
+# MAGIC Ultimately, all three algorithms yielded fairly similar accuracy and precision scores.  Due to the fast training time and fairly large number of true positive predictions with a relatively smaller number of false positive predictions, we focused on optimizing the Logistic Regression model.  When fine-tuning the Random Forest model, we ran into significant computational limitations that were not resolved by scaling up or out. Due to the lackluster performance of the Gradient-Boosted Trees model, we decided it was not worth the time or compute to fine-tune it.  The baseline results for our three algorithms are summarized as follows:
+# MAGIC 
+# MAGIC * Baseline Logistic Regression Training
+# MAGIC   * Accuracy: 0.8203790056456892
+# MAGIC   * Precision: 0.5221751127262938
+# MAGIC   * True Positives: 7759
+# MAGIC   * False Positives: 7100
+# MAGIC * Baseline Logistic Regression Validation
+# MAGIC   * Accuracy: 0.8154005246740127
+# MAGIC   * Precision: 0.4392639734366353
+# MAGIC   * True Positives: 3175
+# MAGIC   * False Positives: 4053
+# MAGIC * Baseline Random Forest Training
+# MAGIC   * Accuracy: 0.8213231793813259
+# MAGIC   * Precision: 0.909340248341894
+# MAGIC   * True Positives: 18235
+# MAGIC   * False Positives: 1818
+# MAGIC * Baseline Random Forest Validation
+# MAGIC   * Accuracy: 0.8155832561642371
+# MAGIC   * Precision: 0.6616362192216044
+# MAGIC   * True Positives: 833
+# MAGIC   * False Positives: 426
+# MAGIC * Baseline Gradient-Boosted Trees Training
+# MAGIC   * Accuracy: 0.8204792469618283
+# MAGIC   * Precision: 0.6080229757272558
+# MAGIC   * True Positives: 6563
+# MAGIC   * False Positives: 4231
+# MAGIC * Baseline Gradient-Boosted Trees Validation
+# MAGIC   * Accuracy: 0.8154005246740127
+# MAGIC   * Precision: 0.4392639734366353
+# MAGIC   * True Positives: 3175
+# MAGIC   * False Positives: 4053
+# MAGIC 
+# MAGIC Please note that the specific results for each run is found below in our comparions chart mentioned in the Conclusions section.  
 
 # COMMAND ----------
 
@@ -294,7 +377,7 @@ transformed_test_data = encoding_pipeline.transform(toy_data_sample_test)['featu
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Algorithm Implementation
+# MAGIC ## Algorithm Choice
 # MAGIC Our best performance consistently came from logistic regression. The toy dataset we are using has five predictor variables and a target variable.  
 # MAGIC **Predictor Variables:**
 # MAGIC  * Origin Wind Speed Rate (integer, \\(x\_1\\)): Current wind speed at the origin airport of a flight. 
@@ -306,7 +389,25 @@ transformed_test_data = encoding_pipeline.transform(toy_data_sample_test)['featu
 # MAGIC **Target Variable:**
 # MAGIC  * Departure Delay Indicator (binary, \\(y\\)): Indicates whether or not a flight departure was delayed 15 mins or more.
 # MAGIC  
-# MAGIC  # FILL OUT MORE MATH STUFF HERE
+# MAGIC In general, logistic regression is used to calculate the log-odds that a binary variable equals 1:  
+# MAGIC \\(l(y=1) = log\frac{p}{1-p} =\beta_0 + \beta_1x_1 + \beta_2x_2 + \beta_3x_3 + \beta_4x_4 + \beta_5x_5\\)  
+# MAGIC where \\(p = P(y=1)\\)
+# MAGIC Based on this, we can use the coefficients (\\(\beta_i\\)) to understand the contribution to the log-odds that each predictor has on the target. In other words, we can estimate the change in log-odds that a flight will be delayed with each unit increase in one of our predictor variables, such as wind speed.   
+# MAGIC   
+# MAGIC **Model Fitting**  
+# MAGIC Logistic Regression is most commonly fit using maximum likelihood estimation. We express the log-likelihood of a given set of parameters \\(\beta\\) as:  
+# MAGIC $$l(\beta) = \sum_{i=1}^{N}\\{y_i logp(x_i;\beta) + (1-y_i)log(1-p(x_i;\beta))\\}$$
+# MAGIC $$l(\beta) = \sum_{i=1}^{N}\\{y_i\beta^{T}x_i - log(1+e^{\beta^{T}x_i})\\}$$
+# MAGIC where \\(N\\) is the number of examples used to train the model.  
+# MAGIC   
+# MAGIC Because our best model included 576 features, regularization became necessary. Using k-fold cross-validation and grid parameter search on a sample of our training data, we decided to use both L1 and L2 regularization in our model. Thus our equation to maximize becomes:  
+# MAGIC $$l(\beta) = \sum_{i=1}^{N}\\{y_i(\beta_0 + \beta^{T}x_i) - log(1+e^{\beta_0+\beta^{T}x_i})\\} -\lambda\sum_{j=1}^{p}|\beta_j| - \gamma \sum_{j=1}^{p}(\beta_j)^{2}$$
+# MAGIC where \\(p\\) is the number of parameters in \\(\beta\\), \\(\lambda\\) is the L1 regularization parameter, and \\(\gamma\\) is the L2 regularization parameter. In the code below, the total amount of regularization (\\(R = \lambda + \gamma\\)) is expressed as `regParam` (\\(R\\)) and `elasticNetParam` (\\(\eta\\)) balances between the two. When \\(\eta\\) is 0, then only L2 regularization is used, and when \\(\eta\\) is 1, then only L1 regularization is used. Values between the two will split regularization types accordingly: \\(R = (1-\eta)\lambda + \eta\gamma\\)
+# MAGIC   
+# MAGIC The fitting process takes place iteratively. We specify the maximum number of iterations using the `maxIter` parameter in the code below.
+# MAGIC   
+# MAGIC **Other Considerations**
+# MAGIC We train our model on the training set and evaluate on both the training and validation sets for tuning. Finally, after tuning we evaluate on the held-out test set. Note, the results below are on a very small sample of data and features for our toy example.
 
 # COMMAND ----------
 
@@ -317,7 +418,7 @@ transformed_test_data = encoding_pipeline.transform(toy_data_sample_test)['featu
 
 # train a model on our transformed train data
 startTime = time.time()
-lr = LogisticRegression(featuresCol = 'features', labelCol = 'label', maxIter = 100, regParam = 0.001, standardization = False)
+lr = LogisticRegression(featuresCol = 'features', labelCol = 'label', maxIter = 100, regParam = 0.001, elasticNetParam = 0.25, standardization = False)
 model = lr.fit(transformed_train_data)
 train_preds = model.transform(transformed_train_data)
 endTime = time.time()
@@ -400,53 +501,32 @@ display(metrics_dataframe)
 
 # COMMAND ----------
 
-# MAGIC %md ## Analysis of Implementation
-# MAGIC @Nick please answer the following when done:
-# MAGIC Use this toy example to explain the math behind the algorithm that you will perform. Apply your algorithm to the training dataset and evaluate your results on the test set. 
+# MAGIC %md 
+# MAGIC ## Model Interpretation  
+# MAGIC Now that we have trained and evaluated our model, we can dive into its coefficients and interpret it.
 
 # COMMAND ----------
 
-
-
-# COMMAND ----------
-
-
-
-# COMMAND ----------
-
-
+#examine coefficients
+print('Coefficients: ')
+print(f'Intercept, beta_0 = {model.interceptVector[0]}')
+print(model.coefficientMatrix)
 
 # COMMAND ----------
 
-
-
-# COMMAND ----------
-
-
-
-# COMMAND ----------
-
-
-
-# COMMAND ----------
-
-
-
-# COMMAND ----------
-
-
-
-# COMMAND ----------
-
-
-
-# COMMAND ----------
-
-
-
-# COMMAND ----------
-
-
+# MAGIC %md
+# MAGIC Our model coefficients are as follows:  
+# MAGIC \\(\beta\_{0} = -1.1600842\\): is our intercept, meaning that if all \\(x\_i\\) are 0, then the odds of \\(y = 1\\), a flight being delayed is: \\(e^{-1.1600842}\\). This equates to and odds ratio of 1 to 0.31.  
+# MAGIC   
+# MAGIC \\(\beta\_{1} = 0.5092805 \\): increasing \\(x\_{1}\\) by 1 increases the log-odds by 0.5092805. So if \\(x\_{1}\\) increases by 1, the odds that \\(y = 1\\) increase by a factor of \\(e^{0.5092805}\\). Putting this in the terms of the feature unit, increasing the wind speed by 1 mph increases the odds of a delay by 1.664.  
+# MAGIC   
+# MAGIC \\(\beta\_2 = -0.25834607\\): increasing \\(x\_{2}\\) by 1 decreases the log-odds by 0.25834607. So if \\(x\_{2}\\) increases by 1, the odds that \\(y = 1\\) increase by a factor of \\(e^{-0.25834607}\\). Putting this in the terms of the feature unit, increasing the ceiling height by 1 foot decreases the odds of a delay by 0.772.   
+# MAGIC   
+# MAGIC \\(\beta\_3 = -0.07973095\\): increasing \\(x\_{3}\\) by 1 decreases the log-odds by 0.07973095. So if \\(x\_{3}\\) increases by 1, the odds that \\(y = 1\\) increase by a factor of \\(e^{-0.07973095}\\). Putting this in the terms of the feature unit and probability, increasing the visibility by 1 foot increases the probability of a delay by 0.92.  
+# MAGIC   
+# MAGIC \\(\beta\_4 = 0.21659978\\): increasing \\(x\_{4}\\) by 1 increases the log-odds by 0.21659978. So if \\(x\_{4}\\) increases by 1, the odds that \\(y = 1\\) increase by a factor of \\(e^{0.21659978}\\). Putting this in the terms of the feature unit, increasing the temperature by 1 degree F increases the odds of a delay by 1.224.  
+# MAGIC   
+# MAGIC \\(\beta\_5 = 0.17401567\\): increasing \\(x\_{5}\\) by 1 increases the log-odds by 0.17401567. So if \\(x\_{5}\\) increases by 1, the odds that \\(y = 1\\) increase by a factor of \\(e^{0.17401567}\\). Putting this in the terms of the feature unit, increasing the barometric pressure by by 1 Pa increases the odds of a delay by 1.190.
 
 # COMMAND ----------
 
@@ -455,25 +535,36 @@ display(metrics_dataframe)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC Link to comparison chart: 'insert path to Github of Model Results Doc'
+# MAGIC ## Performance Evaluation
+# MAGIC The chart below depicts the performance of our models on training and validation sets.  
+# MAGIC ![Performance Chart](https://raw.githubusercontent.com/kevin-hartman/w261_final_project/master/images/prec_acc_f1.png?token=AKEHNPDZBRJHMPD2UZI2BP27GV3XS)  
+# MAGIC A more detailed table of every model run is located here: https://docs.google.com/document/d/1g_uq1LQDFygjZRN8gdLffJVn2puRS-Gqg50IaHL5GgQ/edit
 # MAGIC 
-# MAGIC Note that the above chart contains all of our trials of the three main models tested: Logistic Regression, Random Forests, and Gradient-Boosted Trees.  We highlighted our best performing model from each section in yellow for easy visibility, but the table does a great job of showing the different permutations of models tested along with their associated results.
-# MAGIC 
-# MAGIC After an absurd amount of testing of our three main models, our group had a multitude of revelations.  Firstly, we realized that it is quite difficult to train the Random Forest model consistently due to the inefficiency of the algorithm, especially compared to the other algorithms of Logistic Regression and Gradient-Boosted Trees.  Overall, our group made the following observations (all relative to the Validation Dataset Performance):
-# MAGIC 
-# MAGIC * The actual accuracy results of all three models were quite comparable.
-# MAGIC * Random Forest generated a minimal number of predictions (<1000) for both True and False Positives.
-# MAGIC * Logistic Regression trained on our 586 selected features generated the largest number of True Positive (10427) and False Positive (6319) predictions, while still maintaining a top accuracy score (0.8168) and a respectable precision score of (0.6227).  
-# MAGIC * Gradient-Boosted Trees trained on our 495 selected features (does not include Weather Rolling Average features) and PageRank also generated a significant number of  True Positive (19113) and False Positive (16382) predictions.  
-# MAGIC * Logistic Regression trains incredibly fast when only having a limit number of features.  
-# MAGIC 
-# MAGIC Scalability wise, we encountered issues when training our Random Forest model.  We were only able to fully train our Random Forest model when using our initial Baseline selected features (35 Total).  When trying to train Random Forest with our 495 or 586 features, our cluster simply crashed.  In fact, even performing PCA on our features was unsuccesful: there were still too many columns.  In order to solve this problem, we increased the compute power of our cluster and also tried making it more memory optimized, but Random Forest still crashed.  For all of the models, we ran cross-validation to identify the optimal hyperparameters, so we would not have to consistently run each model arbitrarily over and over again.  This was beneficial in optimizing our training time.  Regarding model run time for 35 features (as Random Forest failed on our 495 and 586 features), our group noticed the following for validation: 
+# MAGIC Our extensive modeling efforts yielded the following conclusions:
+# MAGIC * All of our models had very low F1 scores, < 0.035, indicating that the positive class was rarely predicted.  
+# MAGIC * The accuracy results of all models were comparable and roughly reflected the percentage of flights that were not delayed.
+# MAGIC * Of the models that managed to predict the positive class, Logistic Regression trained on our 586 features generated the largest number of True Positives (10427, while still maintaining a top accuracy score (0.8168) and the best precision score 0.6227 for all models. 
+# MAGIC * Random Forest models exhibited the greatest bias towards the negative class, frequently resulting in fewer than 1000 positive class predictions on the validation set.  
+# MAGIC * Gradient-Boosted Trees trained on our 495 selected features (does not include Weather Rolling Average features) and PageRank also generated the greatest number of positive class predictions, with 19,113 true positives and 16,382 false positives.  
+# MAGIC * Logistic Regression trains incredibly fast when only having a limited number of features.  
+# MAGIC   
+# MAGIC ## Scalability
+# MAGIC Scalability wise, we encountered issues when training our Random Forest model.  We were only able to fully train our Random Forest model when using our initial Baseline selected features (35 Total).  When trying to train Random Forest with our 495 or 586 features, our cluster simply crashed. We attempted to use PCA to reduce the featureset down to the first 100 principal components (95% of observed variance), but this too proved to be unsuccessful.  In order to solve this problem, we attempted to scale up the compute power and memory of our cluster, but Random Forest still crashed. For all of the models, we ran cross-validation to identify the optimal hyperparameters, so we would not have to consistently run each model arbitrarily over and over again.  This was beneficial in optimizing our training time. Regarding model run time for 35 features (as Random Forest failed on our 495 and 586 features), our group noticed the following for validation: 
 # MAGIC 
 # MAGIC * Logistic Regression took around 2 minutes
 # MAGIC * Random Forest took around 12 minutes
 # MAGIC * Gradient Boosted Trees took around 4 minutes
 # MAGIC 
-# MAGIC In order to further optimize our training time, we increased the compute power of our clusters.  Furthermore, we also attempted to train Gradient-Boost Trees on GPUs to further speed up our training time, but we ran into problems with the worker nodes timing out due to heartbeat issues.  Based on the dataset and problem, it is important for training time to be incredibly fast.  Users need to be informed of flight delays ASAP, so longer training times, such as with Random Forest, would not be practical for our users.  It is important for our predictions to be as close to real-time as possible, for data can change quite frequently.  For example, our weather data can change quite frequently, and therefore we would ideally want a robust and speedily trained model that is impervious to numerous changes.  This model will need to be retrained when there are significant changes in dynamic variables such as the weather, e.g if the wind speed changed from 5 mph to 40 mph due to a tornado (an incredibly contrived example).  Overall, however, the model will not need to be retrained on an incredibly consistent basis, but primarily when there are significant changes to the dynamic portion of our features, which will most likely be primarily attributed to the weather data.  
+# MAGIC We also attempted to implement XGBoost on GPUs to further speed up our training time and perhaps achieve better model performance, but we ran into problems with the worker nodes timing out due to heartbeat issues.  
+# MAGIC   
+# MAGIC Based on the dataset and problem, it is not totally important for training times to be incredibly fast. Because weather patterns are geographically linked and exhibit patterns across long periods of time, it is not necessary to retrain the model frequently. A practical retraining frequency would be quarterly, or if stakeholders wanted to be a little bit more conservative, monthly. Because of the infrequent necessity to retrain the model, training time becomes less important unless there are significant budget constraints for computer power that would benefit from faster training times. It is important to note that inference speed is critical for this problem. Users need to be informed of flight delays as soon as possible because issues with prior flights and changes in weather conditions can develop rapidly.
+# MAGIC 
+# MAGIC ## Division of Labor / Focus of Responsibility
+# MAGIC * Sayan and Hersh focused on the modeling efforts and presentation preparation / graphics
+# MAGIC * Nick and Kevin concentrated on Feature Engineering and Data Pipeline orchestration, with late contribution to Modeling
+# MAGIC     
+# MAGIC ## Lessons learned
+# MAGIC  We have come to a new appreciation that 90% of Data Science is spent in data munging/cleaning, EDA, feature engineering, and pipeline orchestration. While we had a workable, fully-joined data set at the midway point, we continued with the same division of labor/responsibilities in the latter half of the project, believing that well-engineered features and a streamlined process would yield dividends to our downstream modeling efforts. Unfortunately, not enough focus was spent on modeling while our feature engineering and pipeline processing efforts continued to be developed. This was hard lesson learned from the team. Had we another week to improve our modeling efforts we believe we would have seen better results. Nonetheless, we come away having learned a lot, not just about Spark, but also on setting and managing expectations on the team objective for success.
 
 # COMMAND ----------
 
@@ -482,12 +573,21 @@ display(metrics_dataframe)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC Our final project incorporated a large variety of course concepts.  For example, one key concept that our course taught was scalability.  This concept was especially apparent when modeling.  For instance, it is much easier to model using Logistic Regression compared to Random Forests, for from a scalability perspective, Random Forest models are computationally much more expensive.  Our group found this especially true when adding more and more features to our models; our Random Forest model frequently crashed as we added numerous features (over 100), whereas our Logistic Regression model ran just fine.  Note that these incidents occurred regardless of how much Computation power we provided to our clusters.  In fact, our group even named a cluster "op_cluster" (where op stands for overpowered), a cluster that was maxed out in everything possible within our AWS vCPU limit, and our Random Forest model STILL crashed.  Furthermore, it was quite impressive to see how I/O scaled in our different Databricks clusters.  Spark was able to handle the ridiculously large number of read and write operations quite well, where our main out-of-memory errors came when modeling as mentioned before.  
+# MAGIC Our final project incorporated many of the concepts we learned in this course. Here are a few that we would like to highlight.  
+# MAGIC   
+# MAGIC #### Scalability
+# MAGIC Scalability was crucial for modeling. For example, it is much easier to model using Logistic Regression compared to Random Forests. Random Forest models are much more computationally expensive than Logisitic Regressiom. This observation became apparent when adding more features to our models. As we added more features our Random Forest models frequently crashed due to memory and network shuffle constraints. In contrast, additional features increased the training times of Logistic Regression models, but memory and network shuffle issues were not encountered. We encountered issues with Random Forest models with many features even when scaling our cluster to the maximums allowed by our AWS accounts with respect to vCPUs and memory. Databricks, AWS, and Spark allowed us to track the performance and health of our clusters along the way. We were particularly impressed with how  well I/O scaled in our different Databricks clusters.
+# MAGIC   
+# MAGIC #### Graph Algorithms
+# MAGIC Flights naturally form a graph from which we can extract information relevant to solving our problem. Further, thinking about flights as a graph led to a lot of discussion about feature engineering. We created a PageRank feature that effectively captured the traffic inbound to each airport. We hypothesized that this would help us because it would provide information about potential traffic congestion at airports that might cause delays. This feature was derived by creating anadjacency matrix that is a hash map where the key is the origin airport and the value is the destination airports and counts that reflect the number of times visited from the origin. 
 # MAGIC 
-# MAGIC Additionally, our group applied the course concept of Graph Algorithms.  Indeed, we created a PageRank feature that essentially applied an inverse page rank algorithm based on the out degree of nodes, where more nodes (aka more routes) imply more weight to the airport, which implies a higher chance of delay. This feature was derived by creating a nearest adjacency matrix that is a hash map where the key is the origin airport and the value is the destination airports and counts that reflect the number of times visited from the origin. This constructs a map of which airports were visited most frequently and which airports have the most departure traffic (out degree of nodes).  Upon the completion of Homework 5, our group was inspired to apply our understanding of PageRank by using the concepts of nodes and edges with airports and routes.  Although the model improvement with the addition of the feature was marginal, the addition of PageRank decreased the number of False Positives relative to our Baseline Logistic Regression model, albeit at the expense of the number of True Positives.  However, as mentioned at the beginning, our group's focus was on decreasing the number of false positives, as we deemed this to be a more substantially negative impact to the user.
+# MAGIC #### Data Systems and Pipelines
+# MAGIC One of our group's earliest objectives was to establish a working feature engineering and modeling pipeline. We leveraged two key pieces of technology:
+# MAGIC 1. Delta Lakes: Delta Lake technology allowed us to have a repeatable, checkpointed pipeline for our feature engineering efforts. Each of our data transformations could be replayed or accessed ad hoc. The latter was critical in scenarios where bugs led to engineered features with unexpected values.
+# MAGIC 2. MLFlow Pipeline: Setting up an MLFlow Pipeline allows for us to apply many of our feature transformations on different datasets (e.g., train, validation, test) with minimal repeated code. Some of the transformations we used include: one-hot encoding categorical data, normalized numerical data using a standard scaler, and vectorized our datasets so that our models could use them. A later addition included FeatureHashing for larger categorical variables.
 # MAGIC 
-# MAGIC Moreover, our group also applied the concept of Data Systems and Pipelines.  In fact, one of our group's earliest objectives was to establish a working modeling pipeline.  This was particuarly noticable in the halfway presentation checkpoint, where we noticed that we appeared to be the only group to establish a modeling pipeline end-to-end.  While it was a big struggle debugging the many vectorization and encoding issues late at night, it was incredibly worth it when testing out a myriad of models.  Our group transformed data by one-hot encoding categorical data, and we normalized numerical data using a standard scaler. These transformation steps were staged in our pipeline so they can be repeated for validation and test evaluation.  Additionally, we imputed null values in both categorical and numerical columns.  
-# MAGIC 
-# MAGIC Finally, we also applied the class concept of model optimization.  While many rookie Data Scientists are in a rat race of adding on as many features as possible, our group meticulously selected our features; for example, we handpicked only key dimensions from the massive weather dataset.  In addition to this, we applied Principal Component Analysis to our features to ensure we were not using anything that did not contribute any meaningful value.  Also, our group applied cross-validation to our models to determine the optimal hyperparameters that will yield the best results.  Moreover, we made sure to really focus on tuning and optimizing more scalable models that were optimal given our time constraint; for instance, we spent quite a bit of time optimizing our Logistic Regression Model compared to our Random Forest model, as the Random Forest model takes a ridiculously large amount of time to run and yields comparable if not inferior performance.
-# MAGIC 
-# MAGIC In conclusion, these are only some of the course concepts our group applied while working on this project.  It was truly a pleasure to work as a team on such an arduous task.  Our group has only one regret: we wish we had more time to work on it.  We are very proud of our work, and we are very thankful to have taken this class.  Thank you very much.
+# MAGIC #### Model Optimization
+# MAGIC We took a two-pronged approach to optimizing our models: feature reduction and hyperparameter tuning. We used Principal Component Analysis and Regularization (L1 and L2) in order to automatically select the features that would have the most predictive power. We used k-fold cross-validation to select the optimal hyperparameters for each model. One key thing we learned is that sometimes the optimal hyperparameters found during cross-validation on a sample dataset were untenable when scaling our model. One example of this is the number of trees for a Random Forest. We also investigated Feature Hashing and addressing class imbalance by considering class weights in late modelling activity in the last few days. While we saw a noticible improvement to our F1 scores, our work is not yet complete as our precision went down. As an exercise for us, after this report is submitted, our plans are to improve our understanding of the models and continue to refine and tune them.
+
+# COMMAND ----------
+
