@@ -8,6 +8,6 @@
 
 
 ## Notebooks
-* [[EDA Notebook][airline_delays_and_weather_eda.py]]
-* [[Modelling Notebook][airline_delays_and_weather_modelling.py]]
-* [[Project Summary][airline_delays_and_weather_summary.py]]
+* [EDA Notebook](airline_delays_and_weather_eda.py)
+* [Modelling Notebook](airline_delays_and_weather_modelling.py)
+* [Project Summary](airline_delays_and_weather_summary.py)
